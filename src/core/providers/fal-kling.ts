@@ -34,7 +34,8 @@ export const klingVideoProvider: VideoProvider = {
     const status = normalizeStatus(result.status);
     if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération fal.ai a échoué.' } : {}) };
     const completed = await fal.queue.result(KLING_ENDPOINT, { requestId });
-    const video = (completed as { video?: { url?: string } }).video;
+    // @fal-ai/client wraps queue results as { data, requestId }.
+    const video = (completed as { data?: { video?: { url?: string } } }).data?.video;
     if (!video?.url) return { status: 'failed', error: 'La réponse fal.ai ne contient pas de vidéo.' };
     return { status: 'ready', videoUrl: video.url };
   },

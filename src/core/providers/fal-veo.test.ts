@@ -22,4 +22,11 @@ describe('Veo 3.1 Fast fal adapter', () => {
     await expect(veoVideoProvider.submit({ prompt: 'Automotive film', imageUrl: 'https://assets.example/car.jpg', durationS: 5, format: '16:9' })).rejects.toThrow('six secondes source');
     expect(mockSubmit).not.toHaveBeenCalled();
   });
+
+  it('reads the video URL from the fal client result data envelope', async () => {
+    mockStatus.mockResolvedValue({ status: 'COMPLETED' });
+    mockResult.mockResolvedValue({ data: { video: { url: 'https://storage.googleapis.com/fal/output.mp4' } }, requestId: 'request-veo' });
+    const { veoVideoProvider } = await import('./fal-veo');
+    await expect(veoVideoProvider.status('request-veo')).resolves.toEqual({ status: 'ready', videoUrl: 'https://storage.googleapis.com/fal/output.mp4' });
+  });
 });

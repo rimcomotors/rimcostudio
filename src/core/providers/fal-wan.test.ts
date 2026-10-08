@@ -19,7 +19,7 @@ describe('Wan 3.0 fal adapter', () => {
 
   it('returns status and the completed video URL', async () => {
     mockStatus.mockResolvedValue({ status: 'COMPLETED' });
-    mockResult.mockResolvedValue({ video: { url: 'https://v3.fal.media/output.mp4' } });
+    mockResult.mockResolvedValue({ data: { video: { url: 'https://v3.fal.media/output.mp4' } }, requestId: 'request-456' });
     const { wanVideoProvider } = await import('./fal-wan');
     expect(await wanVideoProvider.status('request-456')).toEqual({ status: 'ready', videoUrl: 'https://v3.fal.media/output.mp4' });
   });

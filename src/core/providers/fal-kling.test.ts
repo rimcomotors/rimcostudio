@@ -16,7 +16,7 @@ describe('Kling fal adapter', () => {
     const { klingVideoProvider } = await import('./fal-kling');
     expect(await klingVideoProvider.status('request-123')).toEqual({ status: 'queued' });
     mockStatus.mockResolvedValue({ status: 'COMPLETED' });
-    mockResult.mockResolvedValue({ video: { url: 'https://v3.fal.media/output.mp4' } });
+    mockResult.mockResolvedValue({ data: { video: { url: 'https://v3.fal.media/output.mp4' } }, requestId: 'request-123' });
     expect(await klingVideoProvider.status('request-123')).toEqual({ status: 'ready', videoUrl: 'https://v3.fal.media/output.mp4' });
   });
 });
