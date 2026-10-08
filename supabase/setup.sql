@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 9258)
-Total output lines: 455
-
 -- RIMCO Studio initial schema. Safe to apply repeatedly on a clean or existing V1 database.
 create extension if not exists pgcrypto;
 
@@ -160,7 +157,139 @@ grant execute on function public.reserve_budget(uuid,uuid,uuid,numeric,numeric,n
 -- Finalize a reservation exactly once. Actual charges cannot silently push the account over its cap.
 create or replace function public.settle_budget(p_entry_id uuid,p_outcome text,p_actual_cost_usd numeric,p_usd_to_eur numeric,p_eur_to_fcfa numeric,p_cap_eur numeric)
 returns void language plpgsql security definer set search_path = '' as $$
-d…3258 tokens truncated…eserve the maximum configured token cost before each fal LLM request.
+declare entry public.usage_ledger%rowtype; final_eur numeric; final_usd numeric;
+begin
+  if p_outcome not in ('charged','released') or p_cap_eur is null or p_cap_eur < 0
+    or p_usd_to_eur is null or p_usd_to_eur <= 0 or p_eur_to_fcfa is null or p_eur_to_fcfa <= 0
+    or (p_outcome='charged' and (p_actual_cost_usd is null or p_actual_cost_usd < 0)) then
+    raise exception using errcode='22023', message='Paramètres de clôture invalides';
+  end if;
+  perform pg_advisory_xact_lock(hashtext('rimco_budget_cap_eur'));
+  select * into entry from public.usage_ledger where id=p_entry_id for update;
+  if not found or entry.status <> 'reserved' then
+    raise exception using errcode='P0001', message='Réservation introuvable ou déjà clôturée';
+  end if;
+  if p_outcome='released' then
+    update public.usage_ledger set status='released' where id=p_entry_id;
+    return;
+  end if;
+  final_usd := p_actual_cost_usd;
+  final_eur := final_usd * p_usd_to_eur;
+  if coalesce((select sum(l.cost_eur) from public.usage_ledger l where l.status in ('reserved','charged') and l.id<>p_entry_id),0)+final_eur > p_cap_eur then
+    raise exception using errcode='P0001', message='Le coût réel dépasserait le plafond autorisé';
+  end if;
+  update public.usage_ledger set status='charged',cost_usd=final_usd,cost_eur=final_eur,cost_real_fcfa=final_eur*p_eur_to_fcfa where id=p_entry_id;
+end $$;
+revoke all on function public.settle_budget(uuid,text,numeric,numeric,numeric,numeric) from public, anon, authenticated;
+grant execute on function public.settle_budget(uuid,text,numeric,numeric,numeric,numeric) to service_role;
+
+-- A pending item is visible to active validators for review. Admins manage all state;
+-- ordinary clients cannot write processing state, ledger rows, or role assignments.
+do $$ declare t text; begin foreach t in array array['brands','pricing_settings','profiles','ai_models','assets','videos','video_versions','validations','usage_ledger','comparisons'] loop execute format('alter table public.%I enable row level security',t); end loop; end $$;
+drop policy if exists profiles_read_self_or_admin on public.profiles;
+create policy profiles_read_self_or_admin on public.profiles for select to authenticated using(id=auth.uid() or public.is_admin());
+drop policy if exists profiles_admin_manage on public.profiles;
+create policy profiles_admin_manage on public.profiles for all to authenticated using(public.is_admin()) with check(public.is_admin());
+drop policy if exists brands_read_authenticated on public.brands;
+create policy brands_read_authenticated on public.brands for select to authenticated using(true);
+drop policy if exists brands_admin_manage on public.brands;
+create policy brands_admin_manage on public.brands for all to authenticated using(public.is_admin()) with check(public.is_admin());
+drop policy if exists pricing_read_authenticated on public.pricing_settings;
+create policy pricing_read_authenticated on public.pricing_settings for select to authenticated using(true);
+drop policy if exists pricing_admin_manage on public.pricing_settings;
+create policy pricing_admin_manage on public.pricing_settings for all to authenticated using(public.is_admin()) with check(public.is_admin());
+drop policy if exists models_read_authenticated on public.ai_models;
+drop policy if exists models_admin_read on public.ai_models;
+create policy models_admin_read on public.ai_models for select to authenticated using(public.is_admin());
+drop policy if exists models_admin_manage on public.ai_models;
+create policy models_admin_manage on public.ai_models for all to authenticated using(public.is_admin()) with check(public.is_admin());
+drop policy if exists assets_read on public.assets;
+create policy assets_read on public.assets for select to authenticated using(created_by=auth.uid() or public.is_admin() or (status='validée' and exists(select 1 from public.profiles p where p.id=auth.uid() and p.is_active and p.brand_id=assets.brand_id)));
+drop policy if exists assets_insert_self on public.assets;
+create policy assets_insert_self on public.assets for insert to authenticated with check(created_by=auth.uid() and status='en_attente');
+drop policy if exists assets_admin_manage on public.assets;
+create policy assets_admin_manage on public.assets for all to authenticated using(public.is_admin()) with check(public.is_admin());
+drop policy if exists videos_read on public.videos;
+create policy videos_read on public.videos for select to authenticated using(user_id=auth.uid() or public.is_admin() or (status='review' and exists(select 1 from public.profiles p where p.id=auth.uid() and p.role='valideur' and p.is_active and p.brand_id=videos.brand_id and p.department=videos.department)));
+drop policy if exists videos_insert_self on public.videos;
+create policy videos_insert_self on public.videos for insert to authenticated with check(user_id=auth.uid() and status='draft');
+drop policy if exists videos_admin_manage on public.videos;
+create policy videos_admin_manage on public.videos for all to authenticated using(public.is_admin()) with check(public.is_admin());
+drop policy if exists versions_read on public.video_versions;
+create policy versions_read on public.video_versions for select to authenticated using(exists(select 1 from public.videos v where v.id=video_id and (v.user_id=auth.uid() or public.is_admin() or (v.status='review' and exists(select 1 from public.profiles p where p.id=auth.uid() and p.role='valideur' and p.is_active and p.brand_id=v.brand_id and p.department=v.department)))));
+drop policy if exists versions_admin_manage on public.video_versions;
+create policy versions_admin_manage on public.video_versions for all to authenticated using(public.is_admin()) with check(public.is_admin());
+drop policy if exists validations_read on public.validations;
+create policy validations_read on public.validations for select to authenticated using(public.is_admin() or submitted_by=auth.uid() or (status='pending' and exists(select 1 from public.profiles p join public.videos v on v.id=validations.video_id where p.id=auth.uid() and p.role='valideur' and p.is_active and p.brand_id=v.brand_id and p.department=v.department)));
+drop policy if exists validations_admin_manage on public.validations;
+create policy validations_admin_manage on public.validations for all to authenticated using(public.is_admin()) with check(public.is_admin());
+drop policy if exists validations_validator_review on public.validations;
+create policy validations_validator_review on public.validations for update to authenticated using(status='pending' and exists(select 1 from public.profiles p join public.videos v on v.id=validations.video_id where p.id=auth.uid() and p.role='valideur' and p.is_active and p.brand_id=v.brand_id and p.department=v.department)) with check(reviewed_by=auth.uid() and status in ('approved','rejected') and reviewed_at is not null);
+create or replace function public.guard_validation_update() returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  if new.id is distinct from old.id or new.video_id is distinct from old.video_id or new.version_id is distinct from old.version_id
+    or new.submitted_by is distinct from old.submitted_by or new.created_at is distinct from old.created_at then
+    raise exception using errcode='42501', message='Champs de validation non modifiables';
+  end if;
+  if old.status <> 'pending' or new.status not in ('approved','rejected') or new.reviewed_by <> auth.uid() or new.reviewed_at is null then
+    raise exception using errcode='42501', message='Transition de validation non autorisée';
+  end if;
+  if new.status='rejected' and length(trim(coalesce(new.reason,'')))=0 then
+    raise exception using errcode='22023', message='Un motif est obligatoire pour refuser une vidéo';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_validation_update_trigger on public.validations;
+create trigger guard_validation_update_trigger before update on public.validations for each row execute function public.guard_validation_update();
+drop policy if exists ledger_admin_read on public.usage_ledger;
+create policy ledger_admin_read on public.usage_ledger for select to authenticated using(public.is_admin());
+drop policy if exists comparisons_admin_all on public.comparisons;
+create policy comparisons_admin_all on public.comparisons for all to authenticated using(public.is_admin()) with check(public.is_admin());
+
+-- Expose model choices without revealing provider unit costs to collaborators or validators.
+create or replace view public.model_catalog with (security_invoker=true) as
+  select id,name,tier,adapter_family,mode,allowed_durations,allowed_formats,is_active,is_default from public.ai_models;
+revoke all on public.ai_models from anon,authenticated;
+grant select on public.ai_models to authenticated;
+grant select on public.model_catalog to authenticated;
+
+-- Storage objects are private. Uploads go into a first-level folder named with auth.uid().
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values
+  ('assets','assets',false,26214400,array['image/jpeg','image/png','image/webp']::text[]),
+  ('videos','videos',false,104857600,array['video/mp4']::text[]),
+  ('audio','audio',false,26214400,array['audio/mpeg','audio/wav','audio/mp4']::text[]),
+  ('brand','brand',false,26214400,array['image/jpeg','image/png','image/webp']::text[])
+on conflict(id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+drop policy if exists rimco_storage_read on storage.objects;
+create policy rimco_storage_read on storage.objects for select to authenticated using(
+  public.is_admin() or
+  (bucket_id='brand' and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='brand' and exists(select 1 from public.assets a join public.profiles p on p.id=auth.uid() and p.brand_id=a.brand_id and p.is_active where a.path=name and a.kind='logo' and a.status='validée')) or
+  (bucket_id in ('assets','audio') and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='assets' and exists(select 1 from public.assets a where a.path=name and a.status='validée')) or
+  (bucket_id='audio' and exists(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
+  (bucket_id='videos' and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.user_id=auth.uid() and v.status='approved' and vv.final_path=name)) or
+  (bucket_id='videos' and exists(select 1 from public.profiles p join public.videos v on v.brand_id=p.brand_id and v.department=p.department and v.status='review' join public.video_versions vv on vv.video_id=v.id where p.id=auth.uid() and p.role='valideur' and p.is_active and vv.final_path=name))
+);
+drop policy if exists rimco_storage_upload on storage.objects;
+create policy rimco_storage_upload on storage.objects for insert to authenticated with check(bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text);
+drop policy if exists rimco_storage_update on storage.objects;
+create policy rimco_storage_update on storage.objects for update to authenticated using(bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text) with check(bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text);
+drop policy if exists rimco_storage_delete on storage.objects;
+create policy rimco_storage_delete on storage.objects for delete to authenticated using(public.is_admin() or (bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text));
+-- Validators preview the composed file once it is ready for review.
+drop policy if exists rimco_storage_read on storage.objects;
+create policy rimco_storage_read on storage.objects for select to authenticated using(
+  public.is_admin() or
+  (bucket_id='brand' and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='brand' and exists(select 1 from public.assets a join public.profiles p on p.id=auth.uid() and p.brand_id=a.brand_id and p.is_active where a.path=name and a.kind='logo' and a.status='validée')) or
+  (bucket_id in ('assets','audio') and (storage.foldername(name))[1]=auth.uid()::text) or
+  (bucket_id='assets' and exists(select 1 from public.assets a where a.path=name and a.status='validée')) or
+  (bucket_id='audio' and exists(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
+  (bucket_id='videos' and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.user_id=auth.uid() and v.status='approved' and vv.final_path=name)) or
+  (bucket_id='videos' and exists(select 1 from public.profiles p join public.videos v on v.brand_id=p.brand_id and v.department=p.department and v.status='review' join public.video_versions vv on vv.video_id=v.id where p.id=auth.uid() and p.role='valideur' and p.is_active and vv.final_path=name))
+);
+-- Reserve the maximum configured token cost before each fal LLM request.
 create or replace function public.reserve_llm_budget(
   p_user_id uuid, p_version_id uuid, p_max_cost_usd numeric,
   p_usd_to_eur numeric, p_eur_to_fcfa numeric, p_cap_eur numeric, p_department text
