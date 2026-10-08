@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 
 const adminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test';
-const adminPassword = process.env.E2E_ADMIN_PASSWORD ?? 'Test-Rimco-Admin-2026!';
+const adminPassword = process.env.E2E_ADMIN_PASSWORD;
+if (!adminPassword) throw new Error('E2E_ADMIN_PASSWORD doit être préparé par le setup global Playwright.');
 const creatorEmail = process.env.E2E_CREATOR_EMAIL ?? 'collaborateur@rimco.test';
 const testUserPassword = adminPassword;
 

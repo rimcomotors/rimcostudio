@@ -7,6 +7,7 @@ import { supabaseServiceKey } from '@/env';
 import { env } from '@/env';
 import { mockStatusAt } from './mock-status';
 import type { CreateVersionInput } from './live';
+import { calculateClientPriceFcfa } from '@/core/pricing';
 
 export const MOCK_VIDEO_PATH = 'mock/mock-video.mp4';
 
@@ -22,15 +23,11 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
     if (audioError || !audio || audio.kind !== 'audio' || audio.status !== 'validée' || audio.brand_id !== actor.brandId) throw new HttpError(422, 'Choisissez une piste audio validée pour votre marque.');
   }
   const tier = input.tier === 'test' ? 'premium' : input.tier;
-  const [{ data: pricing, error: pricingError }, { data: model, error: modelError }] = await Promise.all([
-    authenticated.from('pricing_settings').select('grid_fcfa_per_second_standard,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).single(),
-    admin.from('ai_models').select('id,price_usd_per_second').eq('tier', tier).eq('is_default', true).eq('is_active', true).single(),
-  ]);
-  if (pricingError || !pricing) throw new HttpError(503, 'La grille de prix de votre marque n’est pas configurée.');
+  const { data: model, error: modelError } = await admin.from('ai_models').select('id,price_usd_per_second').eq('tier', tier).eq('is_default', true).eq('is_active', true).single();
   if (modelError || !model) throw new HttpError(503, `Aucun modèle par défaut actif n’est configuré pour le niveau ${tier}.`);
-  const fcfaPerSecond = Number(tier === 'standard' ? pricing.grid_fcfa_per_second_standard : pricing.grid_fcfa_per_second_premium);
-  const priceFcfa = Math.round(5 * fcfaPerSecond);
-  const brief = buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, camera_movement: input.cameraMovement, mood: input.mood, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, format: input.format, duration_s: 5 });
+  const priceFcfa = calculateClientPriceFcfa(5 * Number(model.price_usd_per_second), env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
+  const fcfaPerSecond = priceFcfa / 5;
+  const brief = buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, camera_movement: input.cameraMovement, mood: input.mood, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
   const prompt = briefToPrompt(brief, 'mock');
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: `${brief.vehicle_description.slice(0, 90)} · Simulation`, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(503, 'Impossible de créer la simulation persistante. Vérifiez la configuration Supabase.');

@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 
-const DURATION_SECONDS = 5;
 const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
 const MAX_LOGO_BYTES = 25 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -14,13 +13,15 @@ const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
 type AdminClient = ReturnType<typeof createStorageAdminClient>;
 
-/** Compose a 5-second MP4 with an aspect-preserving RIMCO logo and optional audio. */
+/** Compose the requested duration with an aspect-preserving RIMCO logo and optional audio. */
 export async function beginPostproduction(versionId: string) {
   const admin = createStorageAdminClient();
   const { data: version, error } = await admin.from('video_versions')
-    .select('id,video_id,raw_path,audio_asset_id,video:videos!inner(id,user_id,brand_id,department)')
+    .select('id,video_id,raw_path,audio_asset_id,generation_seconds,video:videos!inner(id,user_id,brand_id,department)')
     .eq('id', versionId).single();
   if (error || !version?.raw_path) throw new HttpError(409, 'La vidéo brute est indisponible pour la post-production.');
+  const durationSeconds = Number(version.generation_seconds);
+  if (![5, 10, 15, 20, 30].includes(durationSeconds)) throw new HttpError(422, 'La durée enregistrée pour cette vidéo n’est pas prise en charge.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   if (!video?.brand_id || !video.user_id) throw new HttpError(409, 'La marque associée à cette vidéo est introuvable.');
   try {
@@ -51,7 +52,7 @@ export async function beginPostproduction(versionId: string) {
   const outputFile = join(directory, 'final.mp4');
   try {
     await Promise.all([writeFile(rawFile, rawBytes), writeFile(logoFile, logoBytes), ...(audioBytes && audioFile ? [writeFile(audioFile, audioBytes)] : [])]);
-    await runFfmpeg(ffmpegPath, makeFfmpegArgs({ rawFile, logoFile, audioFile, outputFile }));
+    await runFfmpeg(ffmpegPath, makeFfmpegArgs({ rawFile, logoFile, audioFile, outputFile, durationSeconds }));
     const outputStat = await stat(outputFile);
     if (outputStat.size > MAX_VIDEO_BYTES) throw new HttpError(502, 'Le MP4 final dépasse la taille autorisée.');
     const output = await readFile(outputFile);
@@ -69,7 +70,7 @@ export async function beginPostproduction(versionId: string) {
     if (!existingLedger) {
       const { error: ledgerError } = await admin.from('usage_ledger').insert({
         version_id: versionId, user_id: video.user_id, department: video.department ?? '', ai_model_id: null,
-        kind: 'postprod', seconds: DURATION_SECONDS, cost_usd: 0, cost_eur: 0, cost_real_fcfa: 0,
+        kind: 'postprod', seconds: durationSeconds, cost_usd: 0, cost_eur: 0, cost_real_fcfa: 0,
         applied_fcfa_per_second: 0, price_fcfa: 0, status: 'charged',
       });
       if (ledgerError) {
@@ -98,13 +99,13 @@ export async function retryPostproduction(versionId: string, admin: AdminClient)
   return beginPostproduction(versionId);
 }
 
-function makeFfmpegArgs(input: { rawFile: string; logoFile: string; audioFile: string | null; outputFile: string }) {
+function makeFfmpegArgs(input: { rawFile: string; logoFile: string; audioFile: string | null; outputFile: string; durationSeconds: number }) {
   const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', input.rawFile, '-loop', '1', '-i', input.logoFile];
   if (input.audioFile) args.push('-stream_loop', '-1', '-i', input.audioFile);
   args.push('-filter_complex', '[1:v]scale=240:120:force_original_aspect_ratio=decrease:force_divisible_by=2[logo];[0:v][logo]overlay=x=W-w-32:y=H-h-32:format=auto,format=yuv420p[v]', '-map', '[v]');
   if (input.audioFile) args.push('-map', '2:a:0', '-c:a', 'aac', '-b:a', '128k');
   else args.push('-an');
-  args.push('-t', String(DURATION_SECONDS), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', input.outputFile);
+  args.push('-t', String(input.durationSeconds), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', input.outputFile);
   return args;
 }
 

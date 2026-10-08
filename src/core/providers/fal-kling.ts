@@ -23,7 +23,7 @@ export const klingVideoProvider: VideoProvider = {
     const result = await client().queue.submit(KLING_ENDPOINT, { input: {
       prompt: input.prompt,
       image_url: input.imageUrl,
-      duration: '5',
+      duration: String(input.durationS) as `${3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15}`,
       generate_audio: false,
     } });
     return { requestId: result.request_id };

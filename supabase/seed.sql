@@ -13,8 +13,8 @@ update public.ai_models set is_active=false,is_default=false where fal_endpoint_
 update public.ai_models set is_default=false where tier='standard';
 insert into public.ai_models(name,tier,fal_endpoint_id,adapter_family,mode,price_usd_per_second,allowed_durations,allowed_formats,is_active,is_default)
 values
-  ('Kling O3 Pro','standard','fal-ai/kling-video/o3/pro/image-to-video','kling','image_to_video',0.112,'{5}','{16:9,9:16,1:1}',true,true),
-  ('Seedance 2.5','premium','bytedance/seedance-2.5/image-to-video','seedance','image_to_video',0.473,'{5}','{16:9,9:16,1:1}',true,false),
+  ('Kling O3 Pro','standard','fal-ai/kling-video/o3/pro/image-to-video','kling','image_to_video',0.112,'{5,10,15}','{16:9,9:16,1:1}',true,true),
+  ('Seedance 2.5','premium','bytedance/seedance-2.5/image-to-video','seedance','image_to_video',0.473,'{5,10,15,20,30}','{16:9,9:16,1:1}',true,false),
   ('Veo 3.1 Fast','premium','fal-ai/veo3.1/fast/image-to-video','veo','image_to_video',0.10,'{6}','{16:9,9:16}',true,true),
   ('Hailuo 2.3 Pro','test','fal-ai/minimax/hailuo-2.3/pro/image-to-video','minimax','image_to_video',0,'{}','{}',false,false),
   ('Wan 3.0','test','alibaba/wan-3.0/image-to-video','wan','image_to_video',0.10,'{5}','{16:9,9:16,1:1}',true,false)

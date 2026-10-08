@@ -11,7 +11,8 @@ export default async function globalSetup() {
 
   const supabase = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
   const adminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test';
-  const adminPassword = process.env.E2E_ADMIN_PASSWORD ?? 'Test-Rimco-Admin-2026!';
+  const adminPassword = process.env.E2E_ADMIN_PASSWORD ?? `${crypto.randomUUID()}Aa1!`;
+  process.env.E2E_ADMIN_PASSWORD = adminPassword;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!anonKey) throw new Error('La clé publique Supabase locale est requise pour les tests E2E.');
   const admin = await ensureUser(supabase, url, anonKey, adminEmail, adminPassword, 'Administrateur test');

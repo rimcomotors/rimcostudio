@@ -11,12 +11,14 @@ import {
   vehicleCategoryLabels,
   type VehicleCategory,
 } from '@/core/scenes/catalog';
+import { formatFcfa } from '@/core/pricing';
 
 type Format = '16:9' | '9:16' | '1:1' | '4:5';
 type Asset = { id: string; make?: string; model?: string; color?: string; previewUrl?: string | null };
 type AudioAsset = { id: string; variant?: string };
 type Job = { id: string; status: string; error?: string; prompt?: string };
-type Model = { id: string; name: string; tier: string; formats: Format[]; isDefault: boolean };
+type Model = { id: string; name: string; tier: string; adapterFamily: string; formats: Format[]; durations: number[]; estimatedPricesFcfa: Record<string, number>; isDefault: boolean };
+type Complexity = 'simple' | 'balanced' | 'rich';
 
 const lightOptions = [
   'Lumière naturelle claire du matin',
@@ -50,6 +52,8 @@ export function StudioComposer({ mode, isAdmin }: { mode: 'mock' | 'live'; isAdm
   const [mood, setMood] = useState('Moderne, naturel et rassurant');
   const [format, setFormat] = useState<Format>('16:9');
   const [tier, setTier] = useState('standard');
+  const [durationS, setDurationS] = useState(5);
+  const [complexity, setComplexity] = useState<Complexity>('simple');
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -60,7 +64,9 @@ export function StudioComposer({ mode, isAdmin }: { mode: 'mock' | 'live'; isAdm
   const selectedScene = allScenes.find((scene) => scene.id === scenePresetId) ?? categoryScenes[0];
   const selectedModel = availableModels.find((model) => model.id === modelId);
   const compatibleModels = availableModels.filter((model) => model.tier === tier);
-  const total = tier === 'standard' ? '2 300' : '3 500';
+  const supportedDurations = mode === 'live' ? selectedModel?.durations ?? [] : [5];
+  const estimatedPrice = selectedModel?.estimatedPricesFcfa?.[String(durationS)];
+  const priceLabel = mode === 'live' && estimatedPrice ? `≈ ${formatFcfa(estimatedPrice)}` : mode === 'mock' ? 'Simulation' : '—';
 
   function applyScene(sceneId: string) {
     const scene = getScenePreset(sceneId);
@@ -168,7 +174,7 @@ export function StudioComposer({ mode, isAdmin }: { mode: 'mock' | 'live'; isAdm
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           description, assetId, audioAssetId: audioAssetId || null, location, setting, character, lighting,
-          cameraMovement, vehicleAction, mood, vehicleCategory, scenePresetId, format, tier,
+          cameraMovement, vehicleAction, mood, vehicleCategory, scenePresetId, format, tier, durationS, complexity,
           ...(mode === 'live' && modelId ? { modelId } : {}),
         }),
       });
@@ -186,14 +192,14 @@ export function StudioComposer({ mode, isAdmin }: { mode: 'mock' | 'live'; isAdm
     setModelId(id);
     const next = availableModels.find((model) => model.id === id);
     if (next && !next.formats.includes(format)) setFormat(next.formats[0] ?? '16:9');
+    if (next && !next.durations.includes(durationS)) setDurationS(next.durations.includes(5) ? 5 : next.durations[0] ?? 5);
   };
 
   const tierOptions = [
-    ['standard', 'Standard', '2 300 FCFA'],
-    ...(mode === 'live'
-      ? (availableModels.some((model) => model.tier === 'premium') ? [['premium', 'Premium', '3 500 FCFA']] : [])
-        .concat(isAdmin && availableModels.some((model) => model.tier === 'test') ? [['test', 'Test · Wan 3.0', '3 500 FCFA']] : [])
-      : [['premium', 'Premium', '3 500 FCFA']]),
+    { value: 'standard', label: 'Standard', description: 'Modèles et tarifs adaptés à la durée' },
+    ...(mode === 'live' ? (availableModels.some((model) => model.tier === 'premium') ? [{ value: 'premium', label: 'Premium', description: 'Options longues et estimation avant lancement' }] : [])
+      .concat(isAdmin && availableModels.some((model) => model.tier === 'test') ? [{ value: 'test', label: 'Test · Wan 3.0', description: 'Simulation réservée à l’admin' }] : [])
+      : [{ value: 'premium', label: 'Premium', description: 'Simulation' }]),
   ];
 
   return (
@@ -250,18 +256,20 @@ export function StudioComposer({ mode, isAdmin }: { mode: 'mock' | 'live'; isAdm
         </section>
 
         <section className="space-y-4 border-t border-[#eeeae4] pt-5">
-          <div className="grid gap-5 sm:grid-cols-2">
-            <fieldset><legend className="mb-2 text-xs font-semibold">Format</legend><div className="flex flex-wrap gap-2">{(mode === 'live' ? selectedModel?.formats ?? ['16:9', '9:16'] : ['16:9', '9:16', '1:1', '4:5']).map((value) => <button type="button" key={value} onClick={() => setFormat(value as Format)} className={`rounded-lg border px-3 py-2 text-xs ${format === value ? 'border-[#c51e1c] bg-[#fcf4f2] text-[#a62b24]' : 'border-[#e9e7e2] text-[#79756f]'}`}>{value}</button>)}</div></fieldset>
-            <fieldset><legend className="mb-2 text-xs font-semibold">Niveau de génération</legend><div className="flex gap-2">{tierOptions.map(([value, label, price]) => <button type="button" key={value} onClick={() => { setTier(value); const next = availableModels.find((model) => model.tier === value && model.isDefault) ?? availableModels.find((model) => model.tier === value); if (next) setModel(next.id); }} className={`flex-1 rounded-lg border px-3 py-2 text-left ${tier === value ? 'border-[#c51e1c] bg-[#fcf4f2]' : 'border-[#e9e7e2]'}`}><b className="block text-xs">{label}</b><small className="text-[10px] text-[#938f89]">{price} · 5 s</small></button>)}</div></fieldset>
-          </div>
+          <fieldset><legend className="mb-2 text-xs font-semibold">Niveau de génération</legend><div className="grid gap-2 sm:grid-cols-2">{tierOptions.map(({ value, label, description: tierDescription }) => <button type="button" key={value} onClick={() => { setTier(value); const candidates = availableModels.filter((model) => model.tier === value); const next = value === 'premium' ? candidates.find((model) => model.adapterFamily === 'seedance') ?? candidates.find((model) => model.isDefault) : candidates.find((model) => model.isDefault) ?? candidates[0]; if (next) setModel(next.id); }} className={`rounded-lg border px-3 py-3 text-left ${tier === value ? 'border-[#c51e1c] bg-[#fcf4f2]' : 'border-[#e9e7e2]'}`}><b className="block text-xs">{label}</b><small className="mt-1 block text-[10px] leading-4 text-[#938f89]">{tierDescription}</small></button>)}</div></fieldset>
           {mode === 'live' && <label className="grid gap-2 text-xs font-semibold">Modèle vidéo<select value={modelId} onChange={(event) => setModel(event.target.value)} disabled={!compatibleModels.length} className="rounded-md border border-[#e9e7e2] bg-white px-3 py-3 text-sm font-normal">{compatibleModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <fieldset className="sm:col-span-2"><legend className="mb-2 text-xs font-semibold">Durée et montant probable</legend><div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{(supportedDurations.length ? supportedDurations : [5]).map((seconds) => { const price = selectedModel?.estimatedPricesFcfa[String(seconds)]; return <button type="button" key={seconds} onClick={() => setDurationS(seconds)} className={`rounded-lg border px-3 py-3 text-left ${durationS === seconds ? 'border-[#c51e1c] bg-[#fcf4f2]' : 'border-[#e9e7e2]'}`}><b className="block text-xs">{seconds} secondes</b><small className="mt-1 block text-[10px] text-[#79756f]">{price ? `≈ ${formatFcfa(price)}` : mode === 'mock' ? 'Simulation' : 'Estimation indisponible'}</small></button>; })}</div><span className="mt-2 block text-[10px] font-normal leading-4 text-[#88847d]">Estimation FCFA calculée selon le modèle et sa durée. Le montant final peut varier.</span></fieldset>
+            <label className="grid gap-2 text-xs font-semibold">Complexité de la scène<select value={complexity} onChange={(event) => setComplexity(event.target.value as Complexity)} className="rounded-md border border-[#e9e7e2] bg-white px-3 py-3 text-sm font-normal"><option value="simple">Simple · une action, un mouvement caméra</option><option value="balanced">Équilibrée · deux temps visuels liés</option><option value="rich">Riche · jusqu’à trois temps coordonnés</option></select><span className="font-normal text-[#88847d]">Le prompt adapte le rythme à la durée, sans changer de plan.</span></label>
+          </div>
+          <fieldset><legend className="mb-2 text-xs font-semibold">Format</legend><div className="flex flex-wrap gap-2">{(mode === 'live' ? selectedModel?.formats ?? ['16:9', '9:16'] : ['16:9', '9:16', '1:1', '4:5']).map((value) => <button type="button" key={value} onClick={() => setFormat(value as Format)} className={`rounded-lg border px-3 py-2 text-xs ${format === value ? 'border-[#c51e1c] bg-[#fcf4f2] text-[#a62b24]' : 'border-[#e9e7e2] text-[#79756f]'}`}>{value}</button>)}</div></fieldset>
           <label className="grid gap-2 text-xs font-semibold">Piste audio <span className="font-normal text-[#88847d]">Optionnelle · ajoutée après la génération</span>
             <select value={audioAssetId} onChange={(event) => setAudioAssetId(event.target.value)} className="rounded-md border border-[#e9e7e2] bg-white px-3 py-3 text-sm font-normal"><option value="">Sans musique</option>{audioAssets.map((audio, index) => <option key={audio.id} value={audio.id}>{audio.variant || `Piste audio ${index + 1}`}</option>)}</select>
             {!audioAssets.length && <span className="font-normal text-[#88847d]">Aucune piste validée disponible. Ajoutez-en une dans la médiathèque.</span>}
           </label>
-          <p className="text-xs text-[#716d66]">Durée fixe : 5 secondes, en un seul plan continu. Le prompt conserve l’identité du véhicule de la photo.</p>
+          <p className="text-xs text-[#716d66]">Le prompt conserve l’identité du véhicule et ajuste le déroulé à la durée et à la complexité choisies.</p>
           {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
-          <button disabled={busy || !assetId || mode === 'live' && !modelId} className="w-full rounded-md bg-[#c51e1c] py-3.5 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation…' : `Générer ma vidéo · ${total} FCFA`}</button>
+          <button disabled={busy || !assetId || mode === 'live' && (!modelId || !estimatedPrice)} className="w-full rounded-md bg-[#c51e1c] py-3.5 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation…' : `Générer ma vidéo · ${priceLabel}`}</button>
         </section>
       </form>
 
@@ -275,8 +283,10 @@ export function StudioComposer({ mode, isAdmin }: { mode: 'mock' | 'live'; isAdm
             <p><span className="text-[#77736d]">Lieu</span><br />{location || 'À préciser'}</p>
             <p><span className="text-[#77736d]">Action / caméra</span><br />{vehicleAction} · {cameraMovement}</p>
             <p><span className="text-[#77736d]">Personnage</span><br />{characterOptions.find((option) => option.value === character)?.label ?? 'Sans personnage'}</p>
-            <div className="flex justify-between border-t border-[#eeeae4] pt-3"><span className="text-[#77736d]">Durée</span><b>5 secondes · plan continu</b></div>
-            <div className="flex justify-between"><span className="text-[#77736d]">Prix facturé</span><b>{total} FCFA</b></div>
+            <div className="flex justify-between border-t border-[#eeeae4] pt-3"><span className="text-[#77736d]">Durée</span><b>{durationS} secondes · plan continu</b></div>
+            <div className="flex justify-between"><span className="text-[#77736d]">Complexité</span><b>{complexity === 'simple' ? 'Simple' : complexity === 'balanced' ? 'Équilibrée' : 'Riche'}</b></div>
+            <div className="flex justify-between"><span className="text-[#77736d]">Montant probable</span><b>{priceLabel}</b></div>
+            {mode === 'live' && <p className="text-[10px] leading-4 text-[#88847d]">Estimation indicative, selon le modèle et sa durée. Le montant final peut varier.</p>}
           </div>
         </section>
         {job && <section className="rounded-md border border-black/[.055] bg-white p-5"><div className="flex items-center justify-between"><h3 className="text-sm font-semibold">État de la vidéo</h3><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : 'En cours'}</span></div><p className="mt-2 text-xs text-[#88847d]">{job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.error ?? 'Actualisation automatique toutes les 10 secondes.'}</p>{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}</section>}

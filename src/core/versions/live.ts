@@ -14,6 +14,7 @@ import type { z } from 'zod';
 import { requestSchema } from './request-schema';
 import { beginPostproduction, retryPostproduction } from '@/core/postproduction/pipeline';
 import { getScenePreset } from '@/core/scenes/catalog';
+import { calculateClientPriceFcfa } from '@/core/pricing';
 
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
@@ -24,11 +25,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const authenticated = await createSupabaseServerClient();
   const admin = createStorageAdminClient();
   const expectedTier = input.tier;
-  const expectedEndpoint = input.tier === 'test' ? WAN_ENDPOINT : input.tier === 'premium' ? VEO_ENDPOINT : KLING_ENDPOINT;
-  const [{ data: asset, error: assetError }, { data: model, error: modelError }, { data: pricing, error: pricingError }] = await Promise.all([
+  const expectedEndpoint = input.tier === 'test' ? WAN_ENDPOINT : input.tier === 'premium' ? SEEDANCE_ENDPOINT : KLING_ENDPOINT;
+  const [{ data: asset, error: assetError }, { data: model, error: modelError }] = await Promise.all([
     authenticated.from('assets').select('id,kind,path,make,model,color,status,brand_id').eq('id', input.assetId).single(),
     admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,mode,price_usd_per_second,allowed_durations,allowed_formats,is_active,is_default').eq(options?.modelId ? 'id' : 'fal_endpoint_id', options?.modelId ?? expectedEndpoint).eq('is_active', true).single(),
-    authenticated.from('pricing_settings').select('grid_fcfa_per_second_standard,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).single(),
   ]);
   if (assetError || !asset || asset.kind !== 'vehicle' || asset.status !== 'validée' || asset.brand_id !== actor.brandId) throw new HttpError(422, 'Choisissez une photo de véhicule validée pour votre marque.');
   const { data: logos, error: logoError } = await authenticated.from('assets').select('id').eq('brand_id', actor.brandId).eq('kind', 'logo').eq('status', 'validée').limit(1);
@@ -44,25 +44,26 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     || model.adapter_family === 'seedance' && model.fal_endpoint_id === SEEDANCE_ENDPOINT;
   if (!endpointMatches) throw new HttpError(503, 'L’identifiant d’endpoint ne correspond pas à l’adaptateur vidéo activé.');
   if (options?.modelId && model.tier !== expectedTier) throw new HttpError(422, 'Le niveau demandé ne correspond pas au modèle sélectionné.');
-  const sourceDurationS = model.adapter_family === 'veo' ? 6 : 5;
-  if (!model.allowed_durations?.includes(sourceDurationS)) throw new HttpError(503, 'Le modèle demandé ne prend pas en charge la durée source configurée.');
-  if (pricingError || !pricing) throw new HttpError(503, 'La grille de prix de votre marque n’est pas configurée.');
+  const sourceDurationS = model.adapter_family === 'veo' ? 6 : input.durationS;
+  const storedDurations = model.adapter_family === 'veo' ? [5, 6] : model.allowed_durations ?? [];
+  if (!storedDurations.includes(input.durationS) || model.adapter_family === 'kling' && input.durationS > 15 || model.adapter_family === 'seedance' && input.durationS > 30 || model.adapter_family === 'wan' && input.durationS !== 5) throw new HttpError(422, 'La durée choisie n’est pas disponible pour ce modèle.');
   if (!model.allowed_formats?.includes(input.format)) throw new HttpError(422, `Le modèle ne prend pas en charge le format ${input.format}.`);
 
   const { data: image, error: imageError } = await admin.storage.from('assets').createSignedUrl(asset.path, 3600);
   if (imageError || !image?.signedUrl) throw new HttpError(422, 'Impossible de préparer la photo sélectionnée.');
   const vehicleDescription = [asset.make, asset.model, asset.color].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join(' ');
   if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
-  const briefOptions = { vehicle_asset_id: asset.id, vehicle_description: vehicleDescription || 'Véhicule strictement identique à la photo de référence', vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, camera_movement: input.cameraMovement, mood: input.mood, format: input.format };
+  const briefOptions = { vehicle_asset_id: asset.id, vehicle_description: vehicleDescription || 'Véhicule strictement identique à la photo de référence', vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, camera_movement: input.cameraMovement, mood: input.mood, format: input.format, duration_s: input.durationS, complexity: input.complexity };
+  const llmBriefOptions = Object.fromEntries(Object.entries(briefOptions).map(([key, value]) => [key, String(value)]));
   const initialBrief = options?.reuse?.brief ?? buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', briefOptions);
   if (initialBrief.vehicle_asset_id !== asset.id || initialBrief.format !== input.format) throw new HttpError(422, 'Le brief commun ne correspond pas à la photo ou au format sélectionné.');
-  const billedTier = model.tier === 'standard' ? 'standard' : 'premium';
-  const fcfaPerSecond = Number(billedTier === 'standard' ? pricing.grid_fcfa_per_second_standard : pricing.grid_fcfa_per_second_premium);
-  const priceFcfa = Math.round(5 * fcfaPerSecond);
+  const estimatedProviderCostUsd = sourceDurationS * Number(model.price_usd_per_second);
+  const priceFcfa = calculateClientPriceFcfa(estimatedProviderCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
+  const fcfaPerSecond = priceFcfa / input.durationS;
 
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: `${asset.make ?? ''} ${asset.model ?? 'Véhicule'} · Nouvelle création`.trim(), department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: initialBrief, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: 5 }).select('id,number').single();
+  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: initialBrief, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
   if (versionError || !version) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
@@ -102,7 +103,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   }
 
   try {
-    const generated = await buildFalBriefWithCost(input.description, briefOptions);
+    const generated = await buildFalBriefWithCost(input.description, llmBriefOptions);
     llmCallCompleted = true;
     llmReportedCostUsd = generated.costUsd;
     brief = generated.brief as Brief;
@@ -139,7 +140,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   let requestId: string;
   try {
     const provider = model.adapter_family === 'wan' ? wanVideoProvider : model.adapter_family === 'veo' ? veoVideoProvider : model.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
-    ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6, format: input.format, endUserId: actor.id }));
+    ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6 | 10 | 15 | 20 | 30, format: input.format, endUserId: actor.id }));
   } catch {
     await Promise.all([
       admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: env.BUDGET_CAP_EUR }),
@@ -164,32 +165,13 @@ function acceptedFalUrl(rawUrl: string): URL | null {
 
 export async function refreshLiveVersion(versionId: string, actor: Actor) {
   const admin = createStorageAdminClient();
-  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,status,raw_path,final_path,updated_at,error_message,model:ai_models!inner(adapter_family),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
+  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,status,raw_path,final_path,updated_at,model:ai_models!inner(adapter_family),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   const ownsVideo = video?.user_id === actor.id;
   const canReview = actor.role === 'valideur' && video?.status === 'review' && video.brand_id === actor.brandId && video.department === actor.department;
   if (!video || !ownsVideo && !canReview && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
-  if (version.status === 'failed') {
-    if (!version.raw_path || !version.error_message?.startsWith('Impossible de démarrer FFmpeg')) return { id: versionId, status: version.status };
-    const { data: claimed, error: claimError } = await admin.from('video_versions')
-      .update({ status: 'postprocessing', error_message: null, updated_at: new Date().toISOString() })
-      .eq('id', versionId).eq('status', 'failed').eq('raw_path', version.raw_path).select('id').maybeSingle();
-    if (claimError) throw new HttpError(503, 'Impossible de relancer la finalisation de la vidéo.');
-    if (!claimed) return { id: versionId, status: 'postprocessing' as const };
-    try {
-      const processed = await beginPostproduction(versionId);
-      const canDownload = ownsVideo || actor.role === 'admin';
-      return { id: versionId, status: processed.status, videoUrl: canDownload ? await signedVideoUrl(admin, processed.finalPath) : undefined };
-    } catch (postprodError) {
-      const message = postprodError instanceof HttpError ? postprodError.message : 'La post-production a échoué.';
-      await Promise.all([
-        admin.from('video_versions').update({ status: 'failed', error_message: message, updated_at: new Date().toISOString() }).eq('id', versionId),
-        admin.from('videos').update({ status: 'failed' }).eq('id', version.video_id),
-      ]);
-      return { id: versionId, status: 'failed' as const, error: message };
-    }
-  }
+  if (version.status === 'failed') return { id: versionId, status: version.status };
   if (version.status === 'ready') {
     if (video.status === 'generating' && version.final_path) {
       const { error: readyError } = await admin.from('videos').update({ status: 'ready' }).eq('id', version.video_id);
@@ -241,7 +223,9 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   if (rawPath) updates.raw_path = rawPath;
   if (status.error) updates.error_message = status.error;
   if (status.status === 'ready') { updates.status = 'postprocessing'; updates.updated_at = new Date().toISOString(); }
-  // A queued version may already have a persisted Fal request ID; reconcile it as well.
+  // A queued version can already have a Fal request ID when the initial
+  // submission was only partially persisted. Reconcile either in-flight state
+  // so a completed Fal result is not downloaded repeatedly and left unprocessed.
   const { data: claimedVersion, error: updateError } = await admin.from('video_versions').update(updates).eq('id', versionId).in('status', ['queued', 'generating']).select('id').maybeSingle();
   if (updateError) throw new HttpError(503, 'Impossible d’enregistrer le nouvel état de génération.');
   if (status.status === 'ready') {

@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 
 const nav = [
@@ -36,7 +37,7 @@ export function AppShell({ children, mode }: { children: React.ReactNode; mode: 
   const page = nav.find((item) => item.href === pathname)?.label ?? 'Studio';
   return <div className="min-h-screen bg-[var(--background)] text-[var(--ink)]">
     <aside className="fixed inset-y-0 left-0 z-20 hidden w-[232px] flex-col border-r border-[var(--border)] bg-white px-4 py-6 text-[#17171a] lg:flex">
-      <Link href="/" className="mb-10 flex items-center gap-3 px-2"><span className="grid size-10 place-items-center rounded-full border-2 border-[#c51e1c] text-lg font-black text-[#c51e1c]">R</span><span><strong className="block text-[15px] tracking-[.14em]">RIMCO</strong><small className="text-[9px] tracking-[.27em] text-[#77777d]">STUDIO VIDÉO</small></span></Link>
+      <Link href="/" aria-label="RIMCO Motors, accueil" className="mb-10 flex min-h-10 items-center px-2"><Image src="/brand/logo-rimco.png" alt="RIMCO Motors" width={204} height={60} priority className="h-auto w-[176px] object-contain object-left" /></Link>
       <p className="mb-3 px-3 text-[9px] font-bold uppercase tracking-[.2em] text-[#8a8990]">Production</p>
       <nav className="space-y-1">{nav.slice(0, 4).map((item) => <NavLink key={item.href} item={item} pathname={pathname} />)}</nav>
       <p className="mb-3 mt-8 px-3 text-[9px] font-bold uppercase tracking-[.2em] text-[#8a8990]">Pilotage</p>

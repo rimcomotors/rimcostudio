@@ -359,8 +359,8 @@ update public.ai_models set is_active=false,is_default=false where fal_endpoint_
 update public.ai_models set is_default=false where tier='standard';
 insert into public.ai_models(name,tier,fal_endpoint_id,adapter_family,mode,price_usd_per_second,allowed_durations,allowed_formats,is_active,is_default)
 values
-  ('Kling O3 Pro','standard','fal-ai/kling-video/o3/pro/image-to-video','kling','image_to_video',0.112,'{5}','{16:9,9:16,1:1}',true,true),
-  ('Seedance 2.5','premium','bytedance/seedance-2.5/image-to-video','seedance','image_to_video',0.473,'{5}','{16:9,9:16,1:1}',true,false),
+  ('Kling O3 Pro','standard','fal-ai/kling-video/o3/pro/image-to-video','kling','image_to_video',0.112,'{5,10,15}','{16:9,9:16,1:1}',true,true),
+  ('Seedance 2.5','premium','bytedance/seedance-2.5/image-to-video','seedance','image_to_video',0.473,'{5,10,15,20,30}','{16:9,9:16,1:1}',true,false),
   ('Veo 3.1 Fast','premium','fal-ai/veo3.1/fast/image-to-video','veo','image_to_video',0.10,'{6}','{16:9,9:16}',true,true),
   ('Hailuo 2.3 Pro','test','fal-ai/minimax/hailuo-2.3/pro/image-to-video','minimax','image_to_video',0,'{}','{}',false,false),
   ('Wan 3.0','test','alibaba/wan-3.0/image-to-video','wan','image_to_video',0.10,'{5}','{16:9,9:16,1:1}',true,false)
@@ -382,3 +382,59 @@ on conflict(name) do update set tier=excluded.tier,fal_endpoint_id=excluded.fal_
   is_active=excluded.is_active,is_default=excluded.is_default;
 update public.ai_models set is_default=false
 where tier='premium' and fal_endpoint_id='bytedance/seedance-2.5/image-to-video';
+-- Apply a 30% markup to the provider charge when a generation reservation is settled.
+-- This changes the customer-facing price only; provider costs and the budget cap remain intact.
+create or replace function public.settle_budget(p_entry_id uuid,p_outcome text,p_actual_cost_usd numeric,p_usd_to_eur numeric,p_eur_to_fcfa numeric,p_cap_eur numeric)
+returns void language plpgsql security definer set search_path = '' as $$
+declare
+  entry public.usage_ledger%rowtype;
+  final_eur numeric;
+  final_usd numeric;
+  client_price_fcfa numeric;
+begin
+  if p_outcome not in ('charged','released') or p_cap_eur is null or p_cap_eur < 0
+    or p_usd_to_eur is null or p_usd_to_eur <= 0 or p_eur_to_fcfa is null or p_eur_to_fcfa <= 0
+    or (p_outcome='charged' and (p_actual_cost_usd is null or p_actual_cost_usd < 0)) then
+    raise exception using errcode='22023', message='Paramètres de clôture invalides';
+  end if;
+  perform pg_advisory_xact_lock(hashtext('rimco_budget_cap_eur'));
+  select * into entry from public.usage_ledger where id=p_entry_id for update;
+  if not found or entry.status <> 'reserved' then
+    raise exception using errcode='P0001', message='Réservation introuvable ou déjà clôturée';
+  end if;
+  if p_outcome='released' then
+    update public.usage_ledger set status='released' where id=p_entry_id;
+    return;
+  end if;
+  final_usd := p_actual_cost_usd;
+  final_eur := final_usd * p_usd_to_eur;
+  if coalesce((select sum(l.cost_eur) from public.usage_ledger l where l.status in ('reserved','charged') and l.id<>p_entry_id),0)+final_eur > p_cap_eur then
+    raise exception using errcode='P0001', message='Le coût réel dépasserait le plafond autorisé';
+  end if;
+  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.30) else entry.price_fcfa end;
+  update public.usage_ledger
+    set status='charged', cost_usd=final_usd, cost_eur=final_eur,
+        cost_real_fcfa=final_eur*p_eur_to_fcfa,
+        price_fcfa=client_price_fcfa,
+        applied_fcfa_per_second=case when entry.seconds > 0 then client_price_fcfa / entry.seconds else 0 end
+    where id=p_entry_id;
+end $$;
+revoke all on function public.settle_budget(uuid,text,numeric,numeric,numeric,numeric) from public, anon, authenticated;
+grant execute on function public.settle_budget(uuid,text,numeric,numeric,numeric,numeric) to service_role;
+-- Enable requested output durations on the verified image-to-video endpoints.
+-- Veo keeps a 5s final output (6s source); Kling supports up to 15s; Seedance up to 30s.
+alter table public.video_versions drop constraint if exists video_versions_generation_seconds_check;
+alter table public.video_versions add constraint video_versions_generation_seconds_check check (generation_seconds in (5,10,15,20,30));
+
+update public.ai_models
+set allowed_durations='{5,10,15}'
+where fal_endpoint_id='fal-ai/kling-video/o3/pro/image-to-video';
+
+update public.ai_models
+set allowed_durations='{5,10,15,20,30}'
+where fal_endpoint_id='bytedance/seedance-2.5/image-to-video';
+
+-- The application stores final output duration. Veo's six-second source remains adapter-owned.
+update public.ai_models
+set allowed_durations='{5}'
+where fal_endpoint_id='fal-ai/veo3.1/fast/image-to-video';

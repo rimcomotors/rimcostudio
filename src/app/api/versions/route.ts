@@ -24,12 +24,12 @@ export async function GET(request: Request) {
       const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
       const versions = records.map((latest) => {
         const status = latest.reviewStatus === 'approved' ? 'ready' : latest.reviewStatus === 'rejected' ? 'rejected' : latest.reviewStatus === 'pending' ? 'review' : latest.status;
-        return { id: latest.id, videoId: latest.videoId, title: latest.brief.vehicle_description, status, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
+        return { id: latest.id, videoId: latest.videoId, title: latest.brief.vehicle_description, status, durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
       }).filter((item) => !requestedStatus || item.status === requestedStatus);
       return NextResponse.json({ versions });
     }
     const admin = createStorageAdminClient();
-    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,error_message,validations(status),usage_ledger(price_fcfa))').order('created_at', { ascending: false });
+    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(status),usage_ledger(price_fcfa))').order('created_at', { ascending: false });
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (actor.role === 'valideur') {
       if (!actor.brandId) return NextResponse.json({ versions: [] });
@@ -62,8 +62,7 @@ export async function GET(request: Request) {
       }
       if ((video.status === 'approved' || video.status === 'ready' && isOwner) && isPersistedMock) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
-      const retryablePostproduction = latest?.status === 'failed' && Boolean(latest.raw_path) && typeof latest.error_message === 'string' && latest.error_message.startsWith('Impossible de démarrer FFmpeg');
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, versionStatus: latest?.status ?? null, retryablePostproduction, priceFcfa: ledgerRows[0] ? Number(ledgerRows[0].price_fcfa) : typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at };
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, durationSeconds: Number(latest?.generation_seconds ?? 5), versionStatus: latest?.status ?? null, priceFcfa: ledgerRows[0] ? Number(ledgerRows[0].price_fcfa) : typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
@@ -72,9 +71,10 @@ export async function POST(request: Request) {
   try {
     const actor = await getActor();
     const input = requestSchema.parse(await request.json());
+    if (env.PROVIDERS_MODE === 'mock' && input.durationS !== 5) throw new HttpError(422, 'Les durées longues sont disponibles uniquement sur un déploiement connecté à fal.ai.');
     if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
     if (env.PROVIDERS_MODE === 'live') return NextResponse.json(await createLiveVersion(actor, input, { modelId: input.modelId }), { status: 201 });
-    const brief = buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, camera_movement: input.cameraMovement, mood: input.mood, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, format: input.format, duration_s: 5 });
+    const brief = buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, camera_movement: input.cameraMovement, mood: input.mood, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
     if (env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json(await createPersistedMockVersion(actor, input), { status: 201 });
     const prompt = briefToPrompt(brief, 'mock');
     const imageUrl = '/mock/vehicle.svg';

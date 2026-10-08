@@ -61,7 +61,8 @@ export function ComparisonWorkspace({ mode, usdToEurRate, budgetCapEur, llmMaxCo
   }, [comparisons]);
 
   const compatibleModels = useMemo(() => models.filter((model) => model.isActive && (model.adapterFamily === 'veo' ? model.allowedDurations.includes(6) : model.allowedDurations.includes(5)) && model.allowedFormats.includes(format)
-    && ((model.adapterFamily === 'kling' && model.falEndpointId === 'fal-ai/kling-video/v2.6/pro/image-to-video')
+    && ((model.adapterFamily === 'kling' && model.falEndpointId === 'fal-ai/kling-video/o3/pro/image-to-video')
+      || (model.adapterFamily === 'seedance' && model.falEndpointId === 'bytedance/seedance-2.5/image-to-video')
       || (model.adapterFamily === 'wan' && model.falEndpointId === 'alibaba/wan-3.0/image-to-video')
       || (model.adapterFamily === 'veo' && model.falEndpointId === 'fal-ai/veo3.1/fast/image-to-video' && model.allowedDurations.includes(6)))), [models, format]);
   const selectedModels = compatibleModels.filter((model) => selected.includes(model.id));

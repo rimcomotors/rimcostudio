@@ -16,7 +16,8 @@ export const briefSchema = z.object({
   camera_movement: z.string().trim().max(160).default('slow tracking shot'),
   mood: z.string().trim().max(160).default('confident'),
   format: z.enum(['16:9', '9:16', '1:1', '4:5']).default('16:9'),
-  duration_s: z.literal(5).default(5),
+  duration_s: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20), z.literal(30)]).default(5),
+  complexity: z.enum(['simple', 'balanced', 'rich']).default('simple'),
 });
 export type Brief = z.infer<typeof briefSchema>;
 export const briefOptionsSchema = briefSchema.omit({ vehicle_asset_id: true, vehicle_description: true }).partial();
@@ -41,5 +42,17 @@ export function briefToPrompt(brief: Brief, family: string): string {
     ? 'Use a single continuous take and avoid introducing unrequested objects.'
     : family === 'wan' ? 'Favor smooth restrained motion and strong consistency with the reference image.' : 'Use one controlled camera move with no scene cut.';
   const character = brief.character === 'Aucun personnage' ? 'none; do not add people' : brief.character || 'none; do not add people';
-  return `Create a ${brief.duration_s}-second ${brief.format} image-to-video commercial. Keep the vehicle exactly faithful to the provided reference photo: ${brief.vehicle_description}. Vehicle category: ${brief.vehicle_category}. Location: ${brief.location || brief.setting || 'modern urban architecture'}. Setting: ${brief.setting || 'clean, uncluttered surroundings'}. Vehicle action: ${brief.vehicle_action}. Character: ${character}. Lighting: ${brief.lighting}. Camera: ${brief.camera_movement}. Mood: ${brief.mood}. Creative direction: ${brief.creative_direction || 'A polished, realistic automotive shot that follows the selected scene.'}. Additional user direction: ${brief.user_direction || 'none; do not contradict the selected scene'}. Use one continuous shot, a simple composition, natural people only if explicitly selected, and about 90% blue and 10% red tones. ${cameraGuidance} Do not alter the vehicle identity, model, proportions, or paint.`;
+  const pacing = brief.duration_s <= 10
+    ? 'Keep the visual story concise: establish the vehicle, perform one clear action, and finish on a composed hero frame.'
+    : brief.duration_s <= 15
+      ? 'Pace the continuous take in two readable beats: establish the scene, then complete the vehicle action and settle into a hero frame.'
+      : brief.duration_s <= 20
+        ? 'Pace the continuous take in three connected beats: establish the scene, reveal the vehicle through one controlled move, and end on a clean hero frame.'
+        : 'Use a deliberate four-part progression in the same uninterrupted take: establish, approach, reveal, and hold a composed hero frame. Avoid repetitive motion or filler.';
+  const complexity = brief.complexity === 'simple'
+    ? 'Low complexity: one vehicle action, one camera move, no new props or scene changes.'
+    : brief.complexity === 'balanced'
+      ? 'Balanced complexity: two closely related visual beats with one camera move; preserve an uncluttered background.'
+      : 'Higher complexity: up to three coordinated visual beats, all physically plausible and within the same location and continuous camera take.';
+  return `Create a ${brief.duration_s}-second ${brief.format} image-to-video commercial. Keep the vehicle exactly faithful to the provided reference photo: ${brief.vehicle_description}. Vehicle category: ${brief.vehicle_category}. Location: ${brief.location || brief.setting || 'modern urban architecture'}. Setting: ${brief.setting || 'clean, uncluttered surroundings'}. Vehicle action: ${brief.vehicle_action}. Character: ${character}. Lighting: ${brief.lighting}. Camera: ${brief.camera_movement}. Mood: ${brief.mood}. Creative direction: ${brief.creative_direction || 'A polished, realistic automotive shot that follows the selected scene.'}. Additional user direction: ${brief.user_direction || 'none; do not contradict the selected scene'}. ${pacing} ${complexity} Use one continuous shot, a simple composition, natural people only if explicitly selected, and about 90% blue and 10% red tones. ${cameraGuidance} Do not alter the vehicle identity, model, proportions, or paint.`;
 }

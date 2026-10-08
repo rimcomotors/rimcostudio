@@ -1,5 +1,7 @@
 # Validation fal réelle
 
+> Les lignes Kling 2.6 ci-dessous documentent un ancien essai et ne décrivent plus le catalogue actif. Depuis la migration `0005_seedance_kling_o3.sql`, Kling O3 Pro remplace Kling 2.6 et Seedance 2.5 est ajouté au studio. Aucun appel payant n’a été fait avec ces nouveaux endpoints.
+
 Total dépensé pour cette validation : **0,952866 USD** (plafond autorisé : 2,00 USD; solde restant : 1,047134 USD).
 
 Les valeurs qui doivent encore être confirmées par un vrai appel sont explicitement marquées `TODO(verify-fal)` dans les adaptateurs ou le catalogue. Aucun identifiant ou paramètre marqué TODO ne doit être activé pour un usage pilote avant cette validation.

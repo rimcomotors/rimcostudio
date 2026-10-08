@@ -5,7 +5,7 @@
 | Étape | État | Preuve / point restant |
 | --- | --- | --- |
 | 0. Socle | ☑ Livré | Next.js App Router, TypeScript, Supabase, interface française, migrations, seed et CI. Les contrôles de la CI GitHub passent. |
-| 1. Accès | ◷ Invitation envoyée | Invitation Supabase envoyée à `oury@odk-agency.com`. Elle doit être acceptée et le mot de passe défini par le destinataire. Le premier profil reçoit le rôle admin. |
+| 1. Accès | ◷ À reprendre après limite e-mail | Le compte `oury@odk-agency.com` est confirmé et les URL Auth sont corrigées. L’interface signale que le lien essayé est expiré ou déjà utilisé; Supabase a refusé un nouvel envoi pour dépassement de la limite e-mail. Le dernier accès Auth apparaît à 16:09. |
 | 2. Médias | ◷ Code livré, médias à charger | La médiathèque utilise les buckets Supabase privés. Aucun logo ni photo véhicule RIMCO validé n’est fourni par le seed; les charger puis les valider depuis l’application. |
 | 3. Génération | ◷ Prête à tester en live | Mode live activé dans Preview. Le parcours réel génération → stockage → post-production n’a pas encore été exécuté dans l’application. |
 | 4. Validation et édition | Hors périmètre V1 | L’écran de validation est redirigé vers la bibliothèque. Il n’y a ni approbation ni édition par phrase dans le flux V1. |
@@ -15,21 +15,21 @@
 
 ## Services
 
-- **GitHub** — PR #1 et PR #3 sont fusionnées sur `main`. La PR #3 retire le parcours de validation de l’interface et met la route `/validation` en redirection vers la bibliothèque.
-- **Vercel** — projet `rimcostudio`. Le déploiement Production du commit `984e0064525d6e8f76fd811c7d937cf8a1cf03eb` est READY. Le déploiement Preview de la branche `codex/rimco-v1-copy-and-route` est READY. `PROVIDERS_MODE=live` est défini pour les environnements de préproduction; FAL, Supabase et le modèle LLM y sont configurés. Production reste en mode mock par défaut.
-- **Supabase** — projet `Rimco studio` (`hqgxhdekbifyranijvbq`), schéma et seed en place. L’invitation Auth à `oury@odk-agency.com` a été envoyée; l’utilisateur n’a pas encore accepté. Aucun média n’est présent dans le seed.
+- **GitHub** — PR #1, #3, #4 et #5 sont fusionnées sur `main`. La V1 limite l’interface à la génération, la lecture et le téléchargement; la page `/validation` renvoie vers la bibliothèque.
+- **Vercel** — projet `rimcostudio`. Le déploiement Production du commit `34621418e5690912a526e80caee4b31ec2aa24a6` et le déploiement Preview de la branche `codex/rimco-onboarding-v1` (commit `50f5d84cbc1934d4a7d55ea8095369c2f4b52f36`) sont `READY`. `PROVIDERS_MODE=live` est défini en Preview; FAL, Supabase et le modèle LLM y sont configurés. Production reste en mode mock.
+- **Supabase** — projet `Rimco studio` (`hqgxhdekbifyranijvbq`), schéma et seed en place. Le compte Auth `oury@odk-agency.com` est confirmé. URL principale Auth `https://rimcostudio.vercel.app/connexion` et redirect `https://rimcostudio.vercel.app/**` enregistrés et revérifiés après rechargement. Une récupération a été acceptée puis vérifiée, mais l’application n’a pas conservé de session utilisable; la tentative de renvoi a été refusée par la limite d’e-mails. Aucun média n’est présent dans le seed.
 - **Fournisseurs** — la clé FAL communiquée dans la conversation est enregistrée dans Vercel. La rotation de la clé FAL et de la clé Supabase de service est à effectuer après le test, puis Vercel doit être mis à jour.
 
 ## Contrôles vérifiés
 
 - CI GitHub, run `37780443278` : jobs `checks` et `e2e` réussis.
 - Déploiements Vercel Preview et Production : état `READY`.
-- Génération réelle dans l’application : pas encore vérifiée; elle nécessite le compte activé, une photo véhicule validée et un logo RIMCO validé.
+- Génération réelle dans l’application : pas encore vérifiée; elle nécessite une récupération Auth valide, puis une photo véhicule et un logo RIMCO chargés et validés.
 - Aucun nouvel appel payant fal n’a été lancé dans l’application. Un seul essai reste dans le plafond autorisé.
 
 ## Étapes pour terminer le test réel
 
-1. Accepter l’invitation Supabase et définir un mot de passe.
+1. Après le délai de limitation Auth, envoyer un nouveau lien de récupération et vérifier qu’il ouvre directement `/connexion`; définir le mot de passe depuis cet e-mail récent (valable 60 minutes).
 2. Se connecter au Preview et charger un logo RIMCO et une photo de véhicule autorisés, puis valider ces médias.
 3. Lancer une seule génération Standard et vérifier le traitement, la lecture et le téléchargement, sans dépasser le solde fal restant autorisé de 1,047134 USD.
 4. Révoquer/remplacer les clés FAL et Supabase de service exposées, puis actualiser les secrets Vercel.

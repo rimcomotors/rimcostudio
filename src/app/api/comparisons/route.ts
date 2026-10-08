@@ -69,7 +69,8 @@ export async function POST(request: Request) {
     const input = schema.parse(await request.json());
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
       const names: Record<string, string> = {
-        '00000000-0000-4000-8000-000000000002': 'Kling 2.6 Pro',
+        '00000000-0000-4000-8000-000000000002': 'Kling O3 Pro',
+        '00000000-0000-4000-8000-000000000006': 'Seedance 2.5',
         '00000000-0000-4000-8000-000000000005': 'Veo 3.1 Fast',
         '00000000-0000-4000-8000-000000000004': 'Wan 3.0',
       };
@@ -83,7 +84,7 @@ export async function POST(request: Request) {
     }
     const admin = createStorageAdminClient();
     const { data: models, error: modelError } = await admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,is_active,mode,allowed_durations,allowed_formats,price_usd_per_second').in('id', input.modelIds);
-    const supported = (family: string, endpoint: string) => family === 'kling' && endpoint === 'fal-ai/kling-video/v2.6/pro/image-to-video' || family === 'wan' && endpoint === 'alibaba/wan-3.0/image-to-video' || family === 'veo' && endpoint === 'fal-ai/veo3.1/fast/image-to-video';
+    const supported = (family: string, endpoint: string) => family === 'kling' && endpoint === 'fal-ai/kling-video/o3/pro/image-to-video' || family === 'seedance' && endpoint === 'bytedance/seedance-2.5/image-to-video' || family === 'wan' && endpoint === 'alibaba/wan-3.0/image-to-video' || family === 'veo' && endpoint === 'fal-ai/veo3.1/fast/image-to-video';
     const sourceDuration = (family: string) => family === 'veo' ? 6 : 5;
     if (modelError || !models || models.length !== input.modelIds.length || models.some((model) => !model.is_active || model.mode !== 'image_to_video' || !model.allowed_durations.includes(sourceDuration(model.adapter_family)) || !model.allowed_formats.includes(input.brief.format) || !supported(model.adapter_family, model.fal_endpoint_id))) throw new HttpError(422, 'Sélectionnez 2 ou 3 modèles vidéo actifs, vérifiés et compatibles avec le clip final de cinq secondes et le format choisi.');
     if (env.PROVIDERS_MODE === 'live') {
