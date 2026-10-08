@@ -30,3 +30,23 @@ test('collaborateur génère, visionne et télécharge la vidéo simulée',async
  await page.getByRole('link',{name:'Télécharger'}).first().click();
  await expect(await download).toBeTruthy();
 });
+
+test('admin prépare une comparaison de modèles sur une photo validée',async({page})=>{
+ await signIn(page, adminEmail, adminPassword);
+ await page.goto('/comparaison');
+ await expect(page.getByRole('heading',{name:'Comparaison de modèles'})).toBeVisible();
+ await page.getByLabel('Photo validée du véhicule').selectOption({index:0});
+ await page.getByLabel('Brief commun').fill('Un véhicule RIMCO roule calmement dans le Plateau à la lumière douce.');
+ await page.getByRole('checkbox',{name:/Kling 2.6 Pro/}).check();
+ await page.getByRole('checkbox',{name:/Veo 3.1 Fast/}).check();
+ await page.getByRole('button',{name:'Simuler la comparaison'}).click();
+ await expect(page.getByRole('status')).toContainText('Aucun appel fournisseur n’a été effectué.');
+ await page.getByLabel('Fidélité véhicule pour Kling 2.6 Pro').selectOption('5');
+ await page.getByLabel('Réalisme pour Kling 2.6 Pro').selectOption('4');
+ await page.getByLabel('Charte RIMCO pour Kling 2.6 Pro').selectOption('5');
+ await page.getByRole('button',{name:'Enregistrer la note'}).first().click();
+ await expect(page.getByRole('status').filter({hasText:'Évaluation enregistrée.'})).toBeVisible();
+ const download = page.waitForEvent('download');
+ await page.getByRole('button',{name:'Exporter CSV'}).click();
+ await expect(await download).toBeTruthy();
+});
