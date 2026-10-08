@@ -19,23 +19,53 @@ export function LoginForm() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    const type = new URLSearchParams(window.location.hash.slice(1)).get('type');
-    if (type !== 'invite' && type !== 'recovery') return;
+    const hashParams = new URLSearchParams(window.location.hash.slice(1));
+    const searchParams = new URLSearchParams(window.location.search);
+    const type = hashParams.get('type') ?? searchParams.get('type');
+    const code = searchParams.get('code');
+    const accessToken = hashParams.get('access_token');
+    const refreshToken = hashParams.get('refresh_token');
+    const authError = hashParams.get('error_code') ?? searchParams.get('error_code');
+    const firstAccessType = type === 'invite' || type === 'recovery'
+      ? type
+      : code
+        ? 'recovery'
+        : null;
+
+    if (authError) {
+      setError('Ce lien de première connexion a expiré ou a déjà été utilisé. Demandez un nouvel e-mail à l’administrateur.');
+      return;
+    }
+    if (!firstAccessType) return;
 
     let active = true;
     try {
       const client = createSupabaseBrowserClient();
       setSupabase(client);
-      setFirstAccess(type);
-      void client.auth.getSession().then(({ data, error: sessionError }) => {
+      setFirstAccess(firstAccessType);
+      void (async () => {
+        let sessionError: unknown = null;
+        if (code) {
+          const result = await client.auth.exchangeCodeForSession(code);
+          sessionError = result.error;
+        } else if (accessToken && refreshToken) {
+          const result = await client.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+          sessionError = result.error;
+        } else {
+          sessionError = new Error('Le lien ne contient aucun justificatif de connexion.');
+        }
+        const userResult = sessionError ? null : await client.auth.getUser();
         if (!active) return;
-        if (sessionError || !data.session) {
+        if (sessionError || userResult?.error || !userResult?.data.user) {
           setError('Ce lien de première connexion a expiré ou a déjà été utilisé. Demandez un nouvel e-mail à l’administrateur.');
           return;
         }
         setAuthVerified(true);
-        window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
-      }).catch(() => {
+        const cleanUrl = new URL(window.location.href);
+        for (const key of ['code', 'type', 'error', 'error_code', 'error_description']) cleanUrl.searchParams.delete(key);
+        cleanUrl.hash = '';
+        window.history.replaceState({}, document.title, `${cleanUrl.pathname}${cleanUrl.search}`);
+      })().catch(() => {
         if (active) setError('Impossible de vérifier ce lien. Demandez un nouvel e-mail à l’administrateur.');
       });
     } catch {
