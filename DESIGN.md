@@ -17,7 +17,7 @@ typography:
 
 # Overview
 
-RIMCO Studio est un outil de production interne pour créer, suivre et approuver des vidéos automobiles. Son registre est celui de l’atelier de précision : une interface experte et rassurante qui met le véhicule, les décisions de production et le coût au premier plan. Le rouge RIMCO porte l’identité et les actions importantes ; le bleu ardoise structure les informations. Les surfaces restent plates, calmes et séparées par des tons et des traits fins. L’interface est entièrement en français et vise WCAG 2.2 AA, la navigation clavier et la préférence de mouvement réduit.
+RIMCO Studio est un outil de production interne pour générer des vidéos automobiles, les visionner et télécharger leur MP4. La V1 ne comprend ni édition après génération ni validation des vidéos générées. Son registre est celui de l’atelier de précision : une interface experte et rassurante qui met le véhicule, les décisions de production et le coût au premier plan. Le rouge RIMCO porte l’identité et les actions importantes ; le bleu ardoise structure les informations. Les surfaces restent plates, calmes et séparées par des tons et des traits fins. L’interface est entièrement en français et vise WCAG 2.2 AA, la navigation clavier et la préférence de mouvement réduit.
 
 # Colors
 
@@ -61,7 +61,7 @@ Tous les contrôles interactifs définissent les états repos, survol, focus, d�
 - Montrer clairement l’étape de production, le responsable, le statut et le coût pertinent pour le rôle.
 - Donner une rétroaction immédiate après une action et préserver le contexte de travail.
 - Utiliser des icônes SVG sobres accompagnées de libellés lorsqu’une action n’est pas universelle.
-- Garder les décisions irréversibles explicites et demander un motif pour refuser une vidéo.
+- Rendre explicites les étapes de génération, de lecture et de téléchargement.
 
 **À éviter**
 
