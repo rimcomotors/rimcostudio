@@ -135,14 +135,25 @@ export function MediaLibrary() {
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex gap-2 rounded-lg border border-[#e4e1db] bg-[#f5f5f3] p-1">
             {([['all', 'Tout'], ...kinds] as Array<['all' | Asset['kind'], string]>).map(([value, label]) => (
-              <button key={value} onClick={() => setFilter(value)} className={`rounded-md px-3 py-2 text-xs font-semibold transition ${filter === value ? 'bg-[#fbfbfa] text-[#253b4e]' : 'text-[#716d66] hover:text-[#253b4e]'}`}>
+              <button key={value} onClick={() => {
+                setFilter(value);
+                if (value !== 'all') {
+                  setKind(value);
+                  setError('');
+                  setNotice('');
+                }
+              }} className={`rounded-md px-3 py-2 text-xs font-semibold transition ${filter === value ? 'bg-[#fbfbfa] text-[#253b4e]' : 'text-[#716d66] hover:text-[#253b4e]'}`}>
                 {label}{value === 'all' ? ` · ${assets.length}` : ''}
               </button>
             ))}
           </div>
           <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">
-            Type
-            <select value={kind} onChange={(event) => setKind(event.target.value as Asset['kind'])} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2">
+            Type du média à ajouter
+            <select value={kind} onChange={(event) => {
+              setKind(event.target.value as Asset['kind']);
+              setError('');
+              setNotice('');
+            }} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2">
               {kinds.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
