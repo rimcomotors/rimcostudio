@@ -5,6 +5,11 @@ import Link from 'next/link';
 import { StatusPill } from '@/components/shell';
 
 type Video = { id: string; videoId?: string; title?: string; make?: string; model?: string; status: string; durationSeconds?: number; createdAt?: string; created_at?: string; estimatedPriceFcfa?: number; price_fcfa?: number; priceFcfa?: number; videoUrl?: string | null; previewUrl?: string | null; finalUrl?: string };
+
+function formatVideoPrice(video: Video) {
+  const amount = [video.priceFcfa, video.estimatedPriceFcfa, video.price_fcfa].find((value): value is number => typeof value === 'number');
+  return amount === undefined ? 'Montant indisponible' : `${new Intl.NumberFormat('fr-FR').format(amount)} FCFA`;
+}
 const isVideoInProgress = (status: string) => ['queued', 'generating', 'postprocessing'].includes(status);
 
 export function VideoLibrary() {
@@ -122,7 +127,7 @@ export function VideoLibrary() {
           </label>
         </div>
         {video.previewUrl ? <video controls preload="metadata" src={video.previewUrl} className="aspect-video w-full bg-[#232326]" aria-label={`Aperçu de ${video.title ?? 'la vidéo'}`} /> : <div className="grid aspect-video place-items-center bg-[#eeeeef] text-[#8b8b91"><svg aria-hidden="true" viewBox="0 0 24 24" className="size-9 fill-none stroke-current" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg></div>}
-        <div className="p-4"><div className="flex items-center justify-between gap-3"><StatusPill status={labels[video.status] ?? video.status} /><span className="text-xs font-semibold tabular-nums">{new Intl.NumberFormat('fr-FR').format(video.priceFcfa ?? video.estimatedPriceFcfa ?? video.price_fcfa ?? 0)} FCFA</span></div><h3 className="mt-3 truncate text-sm font-semibold">{video.title ?? `${video.make ?? 'Nouvelle'} ${video.model ?? 'vidéo'}`}</h3><p className="mt-1 text-[11px] text-[#77777d]">{video.createdAt ?? video.created_at ?? 'Aujourd’hui'} · {video.durationSeconds ?? 5} s</p>
+        <div className="p-4"><div className="flex items-center justify-between gap-3"><StatusPill status={labels[video.status] ?? video.status} /><span className="text-xs font-semibold tabular-nums">{formatVideoPrice(video)}</span></div><h3 className="mt-3 truncate text-sm font-semibold">{video.title ?? `${video.make ?? 'Nouvelle'} ${video.model ?? 'vidéo'}`}</h3><p className="mt-1 text-[11px] text-[#77777d]">{video.createdAt ?? video.created_at ?? 'Aujourd’hui'} · {video.durationSeconds ?? 5} s</p>
           {video.status === 'ready' && video.videoUrl ? <a href={video.videoUrl} download className="mt-4 inline-flex rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715]">Télécharger le MP4</a> : video.status === 'generating' ? <p className="mt-4 text-xs text-[#626269]">Génération en cours. Mise à jour automatique.</p> : null}
         </div>
       </article>)}

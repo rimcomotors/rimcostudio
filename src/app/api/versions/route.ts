@@ -24,12 +24,12 @@ export async function GET(request: Request) {
       const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
       const versions = records.map((latest) => {
         const status = latest.reviewStatus === 'approved' ? 'ready' : latest.reviewStatus === 'rejected' ? 'rejected' : latest.reviewStatus === 'pending' ? 'review' : latest.status;
-        return { id: latest.id, videoId: latest.videoId, title: latest.brief.vehicle_description, status, durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
+        return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
       }).filter((item) => !requestedStatus || item.status === requestedStatus);
       return NextResponse.json({ versions });
     }
     const admin = createStorageAdminClient();
-    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(status),usage_ledger(price_fcfa))').order('created_at', { ascending: false });
+    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(status),usage_ledger(kind,price_fcfa,status))').order('created_at', { ascending: false });
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (actor.role === 'valideur') {
       if (!actor.brandId) return NextResponse.json({ versions: [] });
@@ -42,6 +42,7 @@ export async function GET(request: Request) {
       const latest = [...rows].sort((a, b) => b.number - a.number)[0];
       const validationRows = Array.isArray(latest?.validations) ? latest.validations : [];
       const ledgerRows = Array.isArray(latest?.usage_ledger) ? latest.usage_ledger : [];
+      const generationLedger = ledgerRows.find((row) => row.kind === 'generation');
       const canPreviewReview = video.status === 'review' && (actor.role === 'admin' || actor.role === 'valideur' && video.brand_id === actor.brandId && video.department === actor.department);
       const latestIsMock = latest?.provider_request_id?.startsWith('mock:') ?? false;
       const isOwner = video.user_id === actor.id;
@@ -62,7 +63,7 @@ export async function GET(request: Request) {
       }
       if ((video.status === 'approved' || video.status === 'ready' && isOwner) && isPersistedMock) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, durationSeconds: Number(latest?.generation_seconds ?? 5), versionStatus: latest?.status ?? null, priceFcfa: ledgerRows[0] ? Number(ledgerRows[0].price_fcfa) : typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at };
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, durationSeconds: Number(latest?.generation_seconds ?? 5), versionStatus: latest?.status ?? null, priceFcfa: generationLedger ? Number(generationLedger.price_fcfa) : typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
@@ -80,7 +81,7 @@ export async function POST(request: Request) {
     const imageUrl = '/mock/vehicle.svg';
     const { requestId } = await mockVideoProvider.submit({ prompt, imageUrl, durationS: 5, format: input.format });
     const id = crypto.randomUUID();
-    const record = putVersion({ id, videoId: crypto.randomUUID(), number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: estimatePriceFcfa(5, input.tier), createdAt: new Date().toISOString() });
+    const record = putVersion({ id, videoId: crypto.randomUUID(), title: input.title || undefined, number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: estimatePriceFcfa(5, input.tier), createdAt: new Date().toISOString() });
     return NextResponse.json({ id: record.id, status: record.status, prompt, estimatedPriceFcfa: record.priceFcfa, version: 1 }, { status: 201 });
   } catch (error) { return errorResponse(error); }
 }

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { vehicleCategories } from '@/core/scenes/catalog';
 export const requestSchema = z.object({
   description: z.string().trim().max(500).default(''),
+  title: z.string().trim().max(120).default(''),
   assetId: z.string().min(1),
   audioAssetId: z.string().min(1).nullable().optional(),
   location: z.string().max(160).default(''),

@@ -29,7 +29,8 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
   const fcfaPerSecond = priceFcfa / 5;
   const brief = buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, camera_movement: input.cameraMovement, mood: input.mood, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, format: input.format, duration_s: input.durationS, complexity: input.complexity });
   const prompt = briefToPrompt(brief, 'mock');
-  const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: `${brief.vehicle_description.slice(0, 90)} · Simulation`, department: actor.department, status: 'generating' }).select('id').single();
+  const title = input.title || `${brief.vehicle_description.slice(0, 90)} · Simulation`;
+  const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(503, 'Impossible de créer la simulation persistante. Vérifiez la configuration Supabase.');
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: { ...brief, mock_metadata: { priceFcfa, provider: 'mock' } }, audio_asset_id: input.audioAssetId ?? null,

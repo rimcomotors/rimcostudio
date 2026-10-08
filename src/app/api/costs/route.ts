@@ -7,7 +7,7 @@ import { createSupabaseServerClient } from '@/core/supabase/server';
 export async function GET() {
   try {
     const actor = await getActor();
-    if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ rows: allVersions().filter((v) => actor.role === 'admin' || v.userId === actor.id).map((v) => ({ version_id: v.id, video_id: v.videoId, title: v.brief.vehicle_description, kind: 'generation', price_fcfa: v.priceFcfa, cost_real_fcfa: 0, cost_eur: 0, department: actor.department, model_name: 'Simulation', seconds: 5, status: v.status, created_at: v.createdAt })) });
+    if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json({ rows: allVersions().filter((v) => actor.role === 'admin' || v.userId === actor.id).map((v) => ({ version_id: v.id, video_id: v.videoId, title: v.title ?? v.brief.vehicle_description, kind: 'generation', price_fcfa: v.priceFcfa, cost_real_fcfa: 0, cost_eur: 0, department: actor.department, model_name: 'Simulation', seconds: 5, status: v.status, created_at: v.createdAt })) });
     if (env.PROVIDERS_MODE === 'mock' && env.NEXT_PUBLIC_SUPABASE_URL) {
       const admin = createStorageAdminClient();
       let mockQuery = admin.from('videos').select('id,user_id,title,status,department,created_at,video_versions(id,number,status,brief_json,created_at,usage_ledger(kind,seconds,price_fcfa,status))').order('created_at', { ascending: false });
@@ -37,7 +37,7 @@ export async function GET() {
       versionIds = (data ?? []).map((v) => v.id);
     }
     const admin = createStorageAdminClient();
-    let query = admin.from('usage_ledger').select('id,version_id,user_id,kind,seconds,price_fcfa,status,created_at,video_versions(video_id,videos(title))').gt('price_fcfa', 0).order('created_at', { ascending: false });
+    let query = admin.from('usage_ledger').select('id,version_id,user_id,kind,seconds,price_fcfa,status,created_at,video_versions(video_id,created_at,videos(title))').gt('price_fcfa', 0).order('created_at', { ascending: false });
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (versionIds) {
       if (!versionIds.length) return NextResponse.json({ rows: [] });
@@ -52,7 +52,7 @@ export async function GET() {
     return NextResponse.json({ rows: (data ?? []).map((row) => {
       const version = Array.isArray(row.video_versions) ? row.video_versions[0] : row.video_versions;
       const video = Array.isArray(version?.videos) ? version?.videos[0] : version?.videos;
-      return { id: row.id, version_id: row.version_id, video_id: version?.video_id, title: video?.title ?? 'Vidéo', kind: row.kind, price_fcfa: Number(row.price_fcfa), seconds: Number(row.seconds), status: row.status, created_at: row.created_at };
+      return { id: row.id, version_id: row.version_id, video_id: version?.video_id, title: video?.title ?? 'Vidéo', kind: row.kind, price_fcfa: Number(row.price_fcfa), seconds: Number(row.seconds), status: row.status, created_at: version?.created_at ?? row.created_at };
     }) });
   } catch (error) { return errorResponse(error); }
 }

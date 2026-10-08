@@ -25,7 +25,9 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const authenticated = await createSupabaseServerClient();
   const admin = createStorageAdminClient();
   const expectedTier = input.tier;
-  const expectedEndpoint = input.tier === 'test' ? WAN_ENDPOINT : input.tier === 'premium' ? SEEDANCE_ENDPOINT : KLING_ENDPOINT;
+  const expectedEndpoint = input.tier === 'standard'
+    ? input.durationS === 5 ? WAN_ENDPOINT : KLING_ENDPOINT
+    : input.durationS === 5 ? VEO_ENDPOINT : SEEDANCE_ENDPOINT;
   const [{ data: asset, error: assetError }, { data: model, error: modelError }] = await Promise.all([
     authenticated.from('assets').select('id,kind,path,make,model,color,status,brand_id').eq('id', input.assetId).single(),
     admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,mode,price_usd_per_second,allowed_durations,allowed_formats,is_active,is_default').eq(options?.modelId ? 'id' : 'fal_endpoint_id', options?.modelId ?? expectedEndpoint).eq('is_active', true).single(),
@@ -43,6 +45,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     || model.adapter_family === 'veo' && model.fal_endpoint_id === VEO_ENDPOINT
     || model.adapter_family === 'seedance' && model.fal_endpoint_id === SEEDANCE_ENDPOINT;
   if (!endpointMatches) throw new HttpError(503, 'L’identifiant d’endpoint ne correspond pas à l’adaptateur vidéo activé.');
+  if (model.fal_endpoint_id !== expectedEndpoint) throw new HttpError(422, 'Le modèle ne correspond pas au niveau et à la durée demandés.');
   if (options?.modelId && model.tier !== expectedTier) throw new HttpError(422, 'Le niveau demandé ne correspond pas au modèle sélectionné.');
   const sourceDurationS = model.adapter_family === 'veo' ? 6 : input.durationS;
   const storedDurations = model.adapter_family === 'veo' ? [5, 6] : model.allowed_durations ?? [];
@@ -61,7 +64,8 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const priceFcfa = calculateClientPriceFcfa(estimatedProviderCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
   const fcfaPerSecond = priceFcfa / input.durationS;
 
-  const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: `${asset.make ?? ''} ${asset.model ?? 'Véhicule'} · Nouvelle création`.trim(), department: actor.department, status: 'generating' }).select('id').single();
+  const videoTitle = input.title || `${asset.make ?? ''} ${asset.model ?? 'Véhicule'} · Nouvelle création`.trim();
+  const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: videoTitle, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
   const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: initialBrief, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
   if (versionError || !version) {

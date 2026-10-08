@@ -325,7 +325,7 @@ update public.ai_models set price_usd_per_second=0, allowed_durations='{}', allo
 where fal_endpoint_id='fal-ai/minimax/hailuo-2.3/pro/image-to-video';
 
 insert into public.ai_models(name,tier,fal_endpoint_id,adapter_family,mode,price_usd_per_second,allowed_durations,allowed_formats,is_active,is_default)
-values ('Wan 3.0','test','alibaba/wan-3.0/image-to-video','wan','image_to_video',0.10,'{5}','{16:9,9:16,1:1}',true,false)
+values ('Wan 3.0','standard','alibaba/wan-3.0/image-to-video','wan','image_to_video',0.10,'{5}','{16:9,9:16,1:1}',true,false)
 on conflict(name) do update set tier=excluded.tier,fal_endpoint_id=excluded.fal_endpoint_id,
   adapter_family=excluded.adapter_family,mode=excluded.mode,price_usd_per_second=excluded.price_usd_per_second,
   allowed_durations=excluded.allowed_durations,allowed_formats=excluded.allowed_formats,
@@ -363,7 +363,7 @@ values
   ('Seedance 2.5','premium','bytedance/seedance-2.5/image-to-video','seedance','image_to_video',0.473,'{5,10,15,20,30}','{16:9,9:16,1:1}',true,false),
   ('Veo 3.1 Fast','premium','fal-ai/veo3.1/fast/image-to-video','veo','image_to_video',0.10,'{6}','{16:9,9:16}',true,true),
   ('Hailuo 2.3 Pro','test','fal-ai/minimax/hailuo-2.3/pro/image-to-video','minimax','image_to_video',0,'{}','{}',false,false),
-  ('Wan 3.0','test','alibaba/wan-3.0/image-to-video','wan','image_to_video',0.10,'{5}','{16:9,9:16,1:1}',true,false)
+  ('Wan 3.0','standard','alibaba/wan-3.0/image-to-video','wan','image_to_video',0.10,'{5}','{16:9,9:16,1:1}',true,false)
 on conflict(name) do update set tier=excluded.tier,fal_endpoint_id=excluded.fal_endpoint_id,
   adapter_family=excluded.adapter_family,mode=excluded.mode,price_usd_per_second=excluded.price_usd_per_second,
   allowed_durations=excluded.allowed_durations,allowed_formats=excluded.allowed_formats,
@@ -438,3 +438,18 @@ where fal_endpoint_id='bytedance/seedance-2.5/image-to-video';
 update public.ai_models
 set allowed_durations='{5}'
 where fal_endpoint_id='fal-ai/veo3.1/fast/image-to-video';
+
+-- 0008_generation_model_routing.sql: fixed model by level and output duration.
+update public.ai_models set is_default=false where is_default;
+update public.ai_models
+set tier='standard', allowed_durations='{5}', is_default=false
+where fal_endpoint_id='alibaba/wan-3.0/image-to-video';
+update public.ai_models
+set tier='standard', allowed_durations='{10,15}', is_default=true
+where fal_endpoint_id='fal-ai/kling-video/o3/pro/image-to-video';
+update public.ai_models
+set tier='premium', allowed_durations='{5}', is_default=true
+where fal_endpoint_id='fal-ai/veo3.1/fast/image-to-video';
+update public.ai_models
+set tier='premium', allowed_durations='{10,15,20,30}', is_default=false
+where fal_endpoint_id='bytedance/seedance-2.5/image-to-video';
