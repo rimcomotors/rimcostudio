@@ -1,7 +1,7 @@
 # Décisions
 
 - Dépôt initial vide : initialisation directe d'une application Next.js App Router avec TypeScript et mode mock par défaut.
-- Périmètre V1 confirmé par le responsable : générer, envoyer en validation, faire approuver, visionner et télécharger. L'édition après génération est exclue.
+- Périmètre V1 confirmé par le responsable : générer une vidéo, la visionner et télécharger son MP4. Pas de validation ni d’édition après génération dans la V1.
 - Appels réels Playground fal : Kling 2.6 Pro a renvoyé un MP4 de 5 s (0,35 USD observé); OpenRouter avec Claude Sonnet 5.5 a généré le brief pour 0,002926 USD. Claude exige `reasoning: true`; l'adaptateur l'envoie désormais. Le parcours live de l'application n'est pas encore vérifié. Détails et compteur dans `docs/FAL_VALIDATION.md`. Révoquer la clé partagée dans le chat après validation.
 - Le script `supabase/setup.sql` a été exécuté avec l'accord explicite du propriétaire sur le projet `Rimco studio` (`hqgxhdekbifyranijvbq`). Table Editor confirme les tables métier, RIMCO Motors, les tarifs 460/700 FCFA/s et les quatre modèles seedés. Le raccordement officiel Supabase–Vercel a aussi été installé et limité au projet Vercel `rimcostudio`; les variables Supabase sont synchronisées en Production.
 - Le package.json cible Next.js 16.2, version stable documentée par Next.js au 8 octobre 2026. Le contrôle de session utilise la convention `proxy.ts` de Next.js 16; l’autorisation par rôle doit aussi être appliquée côté serveur dans chaque route et action.
