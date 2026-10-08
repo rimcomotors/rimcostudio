@@ -5,3 +5,9 @@ const records = new Map<string, VersionRecord>();
 export function putVersion(record: VersionRecord) { records.set(record.id, record); return record; }
 export function getVersion(id: string) { return records.get(id); }
 export function allVersions() { return [...records.values()]; }
+export function deleteVersionsByVideoIds(videoIds: string[]) {
+  const selected = new Set(videoIds);
+  const matching = [...records.entries()].filter(([, record]) => selected.has(record.videoId));
+  matching.forEach(([id]) => records.delete(id));
+  return matching.length;
+}
