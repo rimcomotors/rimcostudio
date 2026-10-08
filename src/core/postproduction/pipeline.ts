@@ -1,12 +1,13 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import ffmpegPath from 'ffmpeg-static';
 
 const DURATION_SECONDS = 5;
+const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
 const MAX_LOGO_BYTES = 25 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
@@ -22,7 +23,11 @@ export async function beginPostproduction(versionId: string) {
   if (error || !version?.raw_path) throw new HttpError(409, 'La vidéo brute est indisponible pour la post-production.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   if (!video?.brand_id || !video.user_id) throw new HttpError(409, 'La marque associée à cette vidéo est introuvable.');
-  if (!ffmpegPath) throw new HttpError(503, 'FFmpeg n’est pas disponible sur ce déploiement.');
+  try {
+    await access(ffmpegPath, constants.X_OK);
+  } catch {
+    throw new HttpError(503, 'FFmpeg n’est pas disponible sur ce déploiement.');
+  }
 
   const [{ data: logos }, { data: audio }] = await Promise.all([
     admin.from('assets').select('path').eq('brand_id', video.brand_id).eq('kind', 'logo').eq('status', 'validée').order('created_at', { ascending: false }).limit(1),
