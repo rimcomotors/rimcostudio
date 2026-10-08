@@ -241,7 +241,8 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   if (rawPath) updates.raw_path = rawPath;
   if (status.error) updates.error_message = status.error;
   if (status.status === 'ready') { updates.status = 'postprocessing'; updates.updated_at = new Date().toISOString(); }
-  const { data: claimedVersion, error: updateError } = await admin.from('video_versions').update(updates).eq('id', versionId).eq('status', 'generating').select('id').maybeSingle();
+  // A queued version may already have a persisted Fal request ID; reconcile it as well.
+  const { data: claimedVersion, error: updateError } = await admin.from('video_versions').update(updates).eq('id', versionId).in('status', ['queued', 'generating']).select('id').maybeSingle();
   if (updateError) throw new HttpError(503, 'Impossible d’enregistrer le nouvel état de génération.');
   if (status.status === 'ready') {
     if (!claimedVersion) return { id: versionId, status: 'postprocessing' as const };
