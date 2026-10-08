@@ -23,7 +23,7 @@ describe('fal LLM brief adapter', () => {
     const brief = await createFalLlmProvider(call).buildBrief('Une Haval H6 dans Abidjan', { vehicle_asset_id: 'asset-42', format: '16:9' });
     expect(brief).toMatchObject({ ...generated, vehicle_asset_id: 'asset-42', vehicle_description: 'Une Haval H6 dans Abidjan', format: '16:9', duration_s: 5, vehicle_category: 'autre' });
     expect(call).toHaveBeenCalledTimes(1);
-    expect(call.mock.calls[0][0]).toContain('Demande: Une Haval H6 dans Abidjan');
+    expect(call.mock.calls[0][0]).toContain('Demande complémentaire: Une Haval H6 dans Abidjan');
   });
 
   it('retries once when JSON fails schema validation, then returns a useful error if still invalid', async () => {
