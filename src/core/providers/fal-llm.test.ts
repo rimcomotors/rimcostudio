@@ -3,7 +3,7 @@ import { buildFalLlmInput, createFalLlmProvider } from './fal-llm';
 
 const generated = {
   location: 'Abidjan', setting: 'architecture contemporaine', character: 'conductrice naturelle',
-  lighting: 'lumière douce de fin de journée', camera_movement: 'travelling latéral lent', mood: 'assurance premium', format: '9:16',
+  lighting: 'lumière douce de fin de journée', camera_movement: 'travelling latéral lent', mood: 'assurance premium', format: '9:16', creative_direction: 'Un travelling fluide révèle la voiture dans une lumière de fin de journée.',
 };
 
 describe('fal LLM brief adapter', () => {
@@ -21,7 +21,7 @@ describe('fal LLM brief adapter', () => {
   it('builds a validated structured brief and anchors vehicle identity and duration server-side', async () => {
     const call = vi.fn().mockResolvedValue({ output: JSON.stringify(generated) });
     const brief = await createFalLlmProvider(call).buildBrief('Une Haval H6 dans Abidjan', { vehicle_asset_id: 'asset-42', format: '16:9' });
-    expect(brief).toEqual({ ...generated, vehicle_asset_id: 'asset-42', vehicle_description: 'Une Haval H6 dans Abidjan', format: '16:9', duration_s: 5 });
+    expect(brief).toMatchObject({ ...generated, vehicle_asset_id: 'asset-42', vehicle_description: 'Une Haval H6 dans Abidjan', format: '16:9', duration_s: 5, vehicle_category: 'autre' });
     expect(call).toHaveBeenCalledTimes(1);
     expect(call.mock.calls[0][0]).toContain('Demande: Une Haval H6 dans Abidjan');
   });

@@ -2,7 +2,7 @@ import { createFalClient } from '@fal-ai/client';
 import { env } from '@/env';
 import type { ProviderStatus, VideoProvider } from './contracts';
 
-export const KLING_ENDPOINT = 'fal-ai/kling-video/v2.6/pro/image-to-video';
+export const KLING_ENDPOINT = 'fal-ai/kling-video/o3/pro/image-to-video';
 function client() {
   if (!env.FAL_KEY) throw new Error('FAL_KEY manque : configurez la clé fal.ai dans Vercel.');
   return createFalClient({ credentials: env.FAL_KEY });
@@ -17,12 +17,12 @@ function normalizeStatus(status: string): ProviderStatus {
   }
 }
 
-/** Adapter for the documented Kling 2.6 Pro image-to-video endpoint. */
+/** Adapter for the documented Kling O3 Pro image-to-video endpoint. */
 export const klingVideoProvider: VideoProvider = {
   async submit(input) {
     const result = await client().queue.submit(KLING_ENDPOINT, { input: {
       prompt: input.prompt,
-      start_image_url: input.imageUrl,
+      image_url: input.imageUrl,
       duration: '5',
       generate_audio: false,
     } });

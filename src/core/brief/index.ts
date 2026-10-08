@@ -1,8 +1,14 @@
 import { z } from 'zod';
+import { vehicleCategories } from '@/core/scenes/catalog';
 
 export const briefSchema = z.object({
   vehicle_asset_id: z.string().min(1),
   vehicle_description: z.string().trim().min(1).max(500),
+  vehicle_category: z.enum(vehicleCategories).default('autre'),
+  scene_preset_id: z.string().trim().max(100).default(''),
+  vehicle_action: z.string().trim().max(160).default('Le véhicule avance lentement et régulièrement'),
+  user_direction: z.string().trim().max(500).default(''),
+  creative_direction: z.string().trim().max(500).default(''),
   location: z.string().trim().max(160).default(''),
   setting: z.string().trim().max(160).default(''),
   character: z.string().trim().max(160).default(''),
@@ -23,6 +29,7 @@ export const generatedBriefFieldsSchema = z.object({
   lighting: z.string().trim().max(160),
   camera_movement: z.string().trim().max(160),
   mood: z.string().trim().max(160),
+  creative_direction: z.string().trim().min(1).max(500),
   format: z.enum(['16:9', '9:16', '1:1', '4:5']),
 }).strict();
 export function buildBrief(description: string, options: Partial<Brief> & { vehicle_asset_id?: string }): Brief {
@@ -33,5 +40,6 @@ export function briefToPrompt(brief: Brief, family: string): string {
   const cameraGuidance = family === 'veo'
     ? 'Use a single continuous take and avoid introducing unrequested objects.'
     : family === 'wan' ? 'Favor smooth restrained motion and strong consistency with the reference image.' : 'Use one controlled camera move with no scene cut.';
-  return `Create a ${brief.duration_s}-second ${brief.format} image-to-video commercial. Keep the vehicle exactly faithful to the provided reference photo: ${brief.vehicle_description}. Location: ${brief.location || brief.setting || 'modern urban architecture'}. Character: ${brief.character || 'none'}. Lighting: soft early morning or late afternoon ${brief.lighting}. Camera: ${brief.camera_movement}. Mood: ${brief.mood}. Use a simple composition, natural people, and about 90% blue and 10% red tones. ${cameraGuidance} Do not alter the vehicle identity, model, proportions, or paint.`;
+  const character = brief.character === 'Aucun personnage' ? 'none; do not add people' : brief.character || 'none; do not add people';
+  return `Create a ${brief.duration_s}-second ${brief.format} image-to-video commercial. Keep the vehicle exactly faithful to the provided reference photo: ${brief.vehicle_description}. Vehicle category: ${brief.vehicle_category}. Location: ${brief.location || brief.setting || 'modern urban architecture'}. Setting: ${brief.setting || 'clean, uncluttered surroundings'}. Vehicle action: ${brief.vehicle_action}. Character: ${character}. Lighting: ${brief.lighting}. Camera: ${brief.camera_movement}. Mood: ${brief.mood}. Creative direction: ${brief.creative_direction || 'A polished, realistic automotive shot that follows the selected scene.'}. Additional user direction: ${brief.user_direction || 'none; do not contradict the selected scene'}. Use one continuous shot, a simple composition, natural people only if explicitly selected, and about 90% blue and 10% red tones. ${cameraGuidance} Do not alter the vehicle identity, model, proportions, or paint.`;
 }

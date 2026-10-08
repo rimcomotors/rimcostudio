@@ -1,6 +1,6 @@
 export type ProviderStatus = 'queued' | 'generating' | 'postprocessing' | 'ready' | 'failed';
 export interface VideoProvider {
-  submit(input: { prompt: string; imageUrl: string; durationS: 5 | 6; format: '16:9' | '9:16' | '1:1' | '4:5' }): Promise<{ requestId: string }>;
+  submit(input: { prompt: string; imageUrl: string; durationS: 5 | 6; format: '16:9' | '9:16' | '1:1' | '4:5'; endUserId?: string }): Promise<{ requestId: string }>;
   status(requestId: string): Promise<{ status: ProviderStatus; videoUrl?: string; error?: string }>;
 }
 export interface LlmProvider {

@@ -30,7 +30,7 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
   if (modelError || !model) throw new HttpError(503, `Aucun modèle par défaut actif n’est configuré pour le niveau ${tier}.`);
   const fcfaPerSecond = Number(tier === 'standard' ? pricing.grid_fcfa_per_second_standard : pricing.grid_fcfa_per_second_premium);
   const priceFcfa = Math.round(5 * fcfaPerSecond);
-  const brief = buildBrief(input.description, { vehicle_asset_id: input.assetId, location: input.location, setting: input.setting, character: input.character, lighting: input.lighting, format: input.format, duration_s: 5 });
+  const brief = buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, camera_movement: input.cameraMovement, mood: input.mood, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, format: input.format, duration_s: 5 });
   const prompt = briefToPrompt(brief, 'mock');
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: `${brief.vehicle_description.slice(0, 90)} · Simulation`, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(503, 'Impossible de créer la simulation persistante. Vérifiez la configuration Supabase.');
@@ -44,7 +44,8 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
   }
   const { data: ledgerId, error: ledgerError } = await admin.rpc('reserve_budget', {
     p_user_id: actor.id, p_version_id: version.id, p_model_id: model.id, p_seconds: 5,
-    p_price_usd_second: Number(model.price_usd_per_second), p_usd_to_eur: env.USD_TO_EUR_RATE,
+    // Simulation never reaches fal.ai, so it must not reserve provider budget.
+    p_price_usd_second: 0, p_usd_to_eur: env.USD_TO_EUR_RATE,
     p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa, p_cap_eur: env.BUDGET_CAP_EUR,
     p_department: actor.department, p_applied_fcfa_second: fcfaPerSecond,
   });
@@ -52,8 +53,7 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(ledgerError?.message.includes('Plafond') ? 409 : 503, ledgerError?.message.includes('Plafond') ? 'Le plafond de coût simulé est atteint. Aucune génération n’a été lancée.' : 'Impossible de réserver le budget simulé. La génération a été annulée.');
   }
-  const costUsd = 5 * Number(model.price_usd_per_second);
-  const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'charged', p_actual_cost_usd: costUsd, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: env.BUDGET_CAP_EUR });
+  const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'charged', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: env.BUDGET_CAP_EUR });
   if (settleError) throw new HttpError(503, 'La simulation est créée, mais son coût doit être réconcilié dans le journal.');
   return { id: version.id, status: 'queued' as const, prompt, estimatedPriceFcfa: priceFcfa, version: version.number };
 }

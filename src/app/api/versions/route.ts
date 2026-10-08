@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { briefToPrompt, buildBrief } from '@/core/brief';
-import { errorResponse, getActor } from '@/core/auth/guards';
+import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { mockVideoProvider } from '@/core/providers/mock';
 import { putVersion, allVersions } from '@/core/versions/store';
 import { estimatePriceFcfa } from '@/core/pricing';
@@ -10,6 +10,7 @@ import { createLiveVersion } from '@/core/versions/live';
 import { createPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSignedVideoDownloadUrl } from '@/core/storage/signed-video';
+import { getScenePreset } from '@/core/scenes/catalog';
 
 export async function GET(request: Request) {
   try {
@@ -66,8 +67,9 @@ export async function POST(request: Request) {
   try {
     const actor = await getActor();
     const input = requestSchema.parse(await request.json());
-    if (env.PROVIDERS_MODE === 'live') return NextResponse.json(await createLiveVersion(actor, input), { status: 201 });
-    const brief = buildBrief(input.description, { vehicle_asset_id: input.assetId, location: input.location, setting: input.setting, character: input.character, lighting: input.lighting, format: input.format, duration_s: 5 });
+    if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
+    if (env.PROVIDERS_MODE === 'live') return NextResponse.json(await createLiveVersion(actor, input, { modelId: input.modelId }), { status: 201 });
+    const brief = buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', { vehicle_asset_id: input.assetId, vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, camera_movement: input.cameraMovement, mood: input.mood, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, format: input.format, duration_s: 5 });
     if (env.NEXT_PUBLIC_SUPABASE_URL) return NextResponse.json(await createPersistedMockVersion(actor, input), { status: 201 });
     const prompt = briefToPrompt(brief, 'mock');
     const imageUrl = '/mock/vehicle.svg';

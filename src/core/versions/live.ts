@@ -4,6 +4,7 @@ import type { Brief } from '@/core/brief';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { wanVideoProvider, WAN_ENDPOINT } from '@/core/providers/fal-wan';
 import { veoVideoProvider, VEO_ENDPOINT } from '@/core/providers/fal-veo';
+import { seedanceVideoProvider, SEEDANCE_ENDPOINT } from '@/core/providers/fal-seedance';
 import { buildFalBriefWithCost, FalLlmBriefError } from '@/core/providers/fal-llm';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSupabaseServerClient } from '@/core/supabase/server';
@@ -12,6 +13,7 @@ import { HttpError } from '@/core/auth/guards';
 import type { z } from 'zod';
 import { requestSchema } from './request-schema';
 import { beginPostproduction, retryPostproduction } from '@/core/postproduction/pipeline';
+import { getScenePreset } from '@/core/scenes/catalog';
 
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
@@ -35,7 +37,12 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     const { data: audio, error: audioError } = await authenticated.from('assets').select('id,kind,status,brand_id').eq('id', input.audioAssetId).single();
     if (audioError || !audio || audio.kind !== 'audio' || audio.status !== 'validée' || audio.brand_id !== actor.brandId) throw new HttpError(422, 'Choisissez une piste audio validée pour votre marque.');
   }
-  if (modelError || !model || !['kling','wan','veo'].includes(model.adapter_family)) throw new HttpError(503, 'Le modèle demandé n’est pas activé ou ne dispose pas d’un adaptateur live.');
+  if (modelError || !model || !['kling','wan','veo','seedance'].includes(model.adapter_family)) throw new HttpError(503, 'Le modèle demandé n’est pas activé ou ne dispose pas d’un adaptateur live.');
+  const endpointMatches = model.adapter_family === 'kling' && model.fal_endpoint_id === KLING_ENDPOINT
+    || model.adapter_family === 'wan' && model.fal_endpoint_id === WAN_ENDPOINT
+    || model.adapter_family === 'veo' && model.fal_endpoint_id === VEO_ENDPOINT
+    || model.adapter_family === 'seedance' && model.fal_endpoint_id === SEEDANCE_ENDPOINT;
+  if (!endpointMatches) throw new HttpError(503, 'L’identifiant d’endpoint ne correspond pas à l’adaptateur vidéo activé.');
   if (options?.modelId && model.tier !== expectedTier) throw new HttpError(422, 'Le niveau demandé ne correspond pas au modèle sélectionné.');
   const sourceDurationS = model.adapter_family === 'veo' ? 6 : 5;
   if (!model.allowed_durations?.includes(sourceDurationS)) throw new HttpError(503, 'Le modèle demandé ne prend pas en charge la durée source configurée.');
@@ -45,8 +52,9 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const { data: image, error: imageError } = await admin.storage.from('assets').createSignedUrl(asset.path, 3600);
   if (imageError || !image?.signedUrl) throw new HttpError(422, 'Impossible de préparer la photo sélectionnée.');
   const vehicleDescription = [asset.make, asset.model, asset.color].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join(' ');
-  const briefOptions = { vehicle_asset_id: asset.id, vehicle_description: vehicleDescription || 'Véhicule strictement identique à la photo de référence', location: input.location, setting: input.setting, character: input.character, lighting: input.lighting, format: input.format };
-  const initialBrief = options?.reuse?.brief ?? buildBrief(input.description, briefOptions);
+  if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
+  const briefOptions = { vehicle_asset_id: asset.id, vehicle_description: vehicleDescription || 'Véhicule strictement identique à la photo de référence', vehicle_category: input.vehicleCategory, scene_preset_id: input.scenePresetId, vehicle_action: input.vehicleAction, user_direction: input.description, location: input.location, setting: input.setting, character: input.character || 'Aucun personnage', lighting: input.lighting, camera_movement: input.cameraMovement, mood: input.mood, format: input.format };
+  const initialBrief = options?.reuse?.brief ?? buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', briefOptions);
   if (initialBrief.vehicle_asset_id !== asset.id || initialBrief.format !== input.format) throw new HttpError(422, 'Le brief commun ne correspond pas à la photo ou au format sélectionné.');
   const billedTier = model.tier === 'standard' ? 'standard' : 'premium';
   const fcfaPerSecond = Number(billedTier === 'standard' ? pricing.grid_fcfa_per_second_standard : pricing.grid_fcfa_per_second_premium);
@@ -130,8 +138,8 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
 
   let requestId: string;
   try {
-    const provider = model.adapter_family === 'wan' ? wanVideoProvider : model.adapter_family === 'veo' ? veoVideoProvider : klingVideoProvider;
-    ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6, format: input.format }));
+    const provider = model.adapter_family === 'wan' ? wanVideoProvider : model.adapter_family === 'veo' ? veoVideoProvider : model.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
+    ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6, format: input.format, endUserId: actor.id }));
   } catch {
     await Promise.all([
       admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: env.BUDGET_CAP_EUR }),
@@ -180,7 +188,7 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   }
   if (!version.provider_request_id) throw new HttpError(409, 'La demande de génération n’a pas encore été enregistrée.');
   const model = Array.isArray(version.model) ? version.model[0] : version.model;
-  const provider = model?.adapter_family === 'wan' ? wanVideoProvider : model?.adapter_family === 'veo' ? veoVideoProvider : klingVideoProvider;
+  const provider = model?.adapter_family === 'wan' ? wanVideoProvider : model?.adapter_family === 'veo' ? veoVideoProvider : model?.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
   const status = await provider.status(version.provider_request_id);
   let rawPath = version.raw_path as string | null;
   if (status.status === 'ready' && status.videoUrl) {

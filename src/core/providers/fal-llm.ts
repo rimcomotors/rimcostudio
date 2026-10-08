@@ -12,9 +12,9 @@ export class FalLlmBriefError extends Error {
     this.name = 'FalLlmBriefError';
   }
 }
-const fields = ['location', 'setting', 'character', 'lighting', 'camera_movement', 'mood', 'format'] as const;
+const fields = ['location', 'setting', 'character', 'lighting', 'camera_movement', 'mood', 'format', 'creative_direction'] as const;
 const fieldNames = fields.join(', ');
-const systemPrompt = `Tu es le directeur de création vidéo automobile de RIMCO. Tu comprends une demande en français et renvoies uniquement un objet JSON valide, sans markdown. Les valeurs textuelles doivent être en français. Les seules clés autorisées sont: ${fieldNames}. Renseigne toutes ces clés pour le brief initial. format doit être l'une de: 16:9, 9:16, 1:1, 4:5. Ne crée jamais de description de véhicule, ne change jamais son identité, sa marque, son modèle ni sa couleur: la photo choisie est la seule référence. Durée fixe: 5 secondes. Propose un lieu, un décor simple, un mouvement caméra réalisable, une lumière douce de début ou fin de journée, des personnages naturels et une ambiance premium.`;
+const systemPrompt = `Tu es le directeur de création vidéo automobile de RIMCO. Tu comprends une demande en français et renvoies uniquement un objet JSON valide, sans markdown. Les valeurs textuelles doivent être en français. Les seules clés autorisées sont: ${fieldNames}. Renseigne toutes ces clés pour le brief initial. Respecte les options déjà choisies, notamment le moment et la lumière (y compris une scène de nuit) et l’absence explicite de personnage. creative_direction doit résumer en une phrase une direction visuelle cinématique cohérente avec ces choix, sans ajouter de lieu, personnage, véhicule ou action contradictoire. format doit être l'une de: 16:9, 9:16, 1:1, 4:5. Ne crée jamais de description de véhicule, ne change jamais son identité, sa marque, son modèle ni sa couleur: la photo choisie est la seule référence. Durée fixe: 5 secondes. Propose une action simple, un mouvement caméra réalisable et une ambiance premium, sans coupe.`;
 
 type FalSubscribe = (endpoint: string, options: { input: Record<string, string | number | boolean> }) => Promise<unknown>;
 export type LlmCall = (prompt: string, systemPrompt: string) => Promise<unknown>;
@@ -89,7 +89,7 @@ export function createFalLlmProvider(call: LlmCall) {
       return (await this.buildBriefWithCost(description, options)).brief;
     },
     async buildBriefWithCost(description: string, options: Record<string, string>) {
-      const prompt = `À partir de cette demande utilisateur, construis le brief vidéo RIMCO. Garde la demande fidèle et concise. Les options déjà choisies doivent être respectées: ${JSON.stringify(options)}.\nDemande: ${description}`;
+      const prompt = `À partir de cette demande utilisateur, construis le brief vidéo RIMCO. Garde la demande fidèle et concise. Les options déjà choisies doivent être respectées: ${JSON.stringify(options)}. La creative_direction doit bien les synthétiser sans ajouter de détails contradictoires.\nDemande complémentaire: ${description || 'Aucune; compose uniquement à partir des options choisies.'}`;
       const generated = await validatedFields(call, prompt, generatedBriefFieldsSchema);
       const selectedOptions = Object.fromEntries(Object.entries(options).filter(([key, value]) => key === 'vehicle_asset_id' || key === 'vehicle_description' || value.trim().length > 0));
       return { brief: briefSchema.parse({ vehicle_asset_id: options.vehicle_asset_id || 'mock-vehicle', vehicle_description: options.vehicle_description || description, ...generated.fields, ...selectedOptions, duration_s: 5 }), costUsd: generated.costUsd };
