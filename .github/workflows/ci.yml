@@ -42,7 +42,9 @@ jobs:
       - uses: supabase/setup-cli@v1
         with:
           version: latest
-      - run: supabase start
+      # The E2E workflow uses Auth, Postgres/PostgREST, Storage, and Kong only.
+      # Excluding optional services lowers startup time and public image pulls.
+      - run: supabase start --exclude studio,mailpit,postgres-meta,edge-runtime,logflare,vector,realtime,supavisor
       - name: Configure local Supabase test variables
         shell: bash
         run: |
