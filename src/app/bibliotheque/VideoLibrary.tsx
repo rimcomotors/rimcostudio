@@ -13,6 +13,13 @@ export function VideoLibrary() {
   const [error, setError] = useState('');
   const [retrying, setRetrying] = useState('');
 
+  const loadVideos = useCallback(async () => {
+    const response = await fetch('/api/versions');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error ?? 'Impossible de charger la bibliothèque.');
+    setVideos(data.versions ?? []);
+  }, []);
+
   async function retryPostproduction(video: Video) {
     setRetrying(video.id);
     setError('');
@@ -27,13 +34,6 @@ export function VideoLibrary() {
       setRetrying('');
     }
   }
-
-  const loadVideos = useCallback(async () => {
-    const response = await fetch('/api/versions');
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error ?? 'Impossible de charger la bibliothèque.');
-    setVideos(data.versions ?? []);
-  }, []);
 
   useEffect(() => { loadVideos().catch((cause) => setError(cause instanceof Error ? cause.message : 'Une erreur est survenue.')); }, [loadVideos]);
   useEffect(() => {
