@@ -25,7 +25,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ versions });
     }
     const admin = createStorageAdminClient();
-    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(status),usage_ledger(price_fcfa))').order('created_at', { ascending: false });
+    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,error_message,validations(status),usage_ledger(price_fcfa))').order('created_at', { ascending: false });
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (actor.role === 'valideur') {
       if (!actor.brandId) return NextResponse.json({ versions: [] });
@@ -58,7 +58,8 @@ export async function GET(request: Request) {
       }
       if ((video.status === 'approved' || video.status === 'ready' && isOwner) && isPersistedMock) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, versionStatus: latest?.status ?? null, priceFcfa: ledgerRows[0] ? Number(ledgerRows[0].price_fcfa) : typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at };
+      const retryablePostproduction = latest?.status === 'failed' && Boolean(latest.raw_path) && typeof latest.error_message === 'string' && latest.error_message.startsWith('Impossible de démarrer FFmpeg');
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, versionStatus: latest?.status ?? null, retryablePostproduction, priceFcfa: ledgerRows[0] ? Number(ledgerRows[0].price_fcfa) : typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
