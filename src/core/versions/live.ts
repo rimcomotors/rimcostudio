@@ -164,13 +164,32 @@ function acceptedFalUrl(rawUrl: string): URL | null {
 
 export async function refreshLiveVersion(versionId: string, actor: Actor) {
   const admin = createStorageAdminClient();
-  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,status,raw_path,final_path,updated_at,model:ai_models!inner(adapter_family),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
+  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,status,raw_path,final_path,updated_at,error_message,model:ai_models!inner(adapter_family),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   const ownsVideo = video?.user_id === actor.id;
   const canReview = actor.role === 'valideur' && video?.status === 'review' && video.brand_id === actor.brandId && video.department === actor.department;
   if (!video || !ownsVideo && !canReview && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
-  if (version.status === 'failed') return { id: versionId, status: version.status };
+  if (version.status === 'failed') {
+    if (!version.raw_path || !version.error_message?.startsWith('Impossible de démarrer FFmpeg')) return { id: versionId, status: version.status };
+    const { data: claimed, error: claimError } = await admin.from('video_versions')
+      .update({ status: 'postprocessing', error_message: null, updated_at: new Date().toISOString() })
+      .eq('id', versionId).eq('status', 'failed').eq('raw_path', version.raw_path).select('id').maybeSingle();
+    if (claimError) throw new HttpError(503, 'Impossible de relancer la finalisation de la vidéo.');
+    if (!claimed) return { id: versionId, status: 'postprocessing' as const };
+    try {
+      const processed = await beginPostproduction(versionId);
+      const canDownload = ownsVideo || actor.role === 'admin';
+      return { id: versionId, status: processed.status, videoUrl: canDownload ? await signedVideoUrl(admin, processed.finalPath) : undefined };
+    } catch (postprodError) {
+      const message = postprodError instanceof HttpError ? postprodError.message : 'La post-production a échoué.';
+      await Promise.all([
+        admin.from('video_versions').update({ status: 'failed', error_message: message, updated_at: new Date().toISOString() }).eq('id', versionId),
+        admin.from('videos').update({ status: 'failed' }).eq('id', version.video_id),
+      ]);
+      return { id: versionId, status: 'failed' as const, error: message };
+    }
+  }
   if (version.status === 'ready') {
     if (video.status === 'generating' && version.final_path) {
       const { error: readyError } = await admin.from('videos').update({ status: 'ready' }).eq('id', version.video_id);
