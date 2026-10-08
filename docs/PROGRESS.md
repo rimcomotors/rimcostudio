@@ -1,42 +1,36 @@
 # Avancement de la V1
 
-État vérifié le 8 octobre 2026. Une étape est cochée seulement lorsque ses critères sont vérifiés au niveau indiqué. « Code livré » ne signifie pas « parcours distant vérifié ».
+État vérifié le 8 octobre 2026. La V1 demandée permet de générer une vidéo de 5 secondes, la visionner puis télécharger son MP4. Elle ne comprend pas la validation ni l’édition après génération.
 
 | Étape | État | Preuve / point restant |
 | --- | --- | --- |
-| 0. Socle | ☑ Code livré | Next.js App Router, TypeScript, Tailwind, Supabase SSR, interface française, thème, migrations/seed, Vitest et CI. Lint, TypeScript et build locaux réussis. |
-| 1. Administration | ☑ Code livré | Premier admin par trigger, rôles, gestion des comptes, grille et catalogue; autorisation côté serveur. Compte pilote à créer. |
-| 2. Médiathèque | ☑ Code livré | Téléversement direct signé et validation d’assets. À vérifier sur Supabase réel avec logo et média autorisés. |
-| 3. Studio et génération | ☑ Code livré | Photo validée requise, estimation, réservation, brief, fournisseurs mock/live et suivi. Intégration live de l’application non vérifiée. |
-| 4. Édition et versions | ☑ Hors périmètre V1 | L’édition après génération a été explicitement retirée du périmètre par le responsable. |
-| 5. Post-production | ☑ Code livré | FFmpeg compose le logo et l’audio optionnel; rendu local mock vérifié. Storage réel et fonction Vercel non vérifiés. |
-| 6. Bibliothèque, validation et coûts | ☑ Code livré | Approbation/refus motivé, téléchargement après approbation, coûts, plafond et export. Parcours distant non vérifié. |
-| 7. Comparaison | ☑ Code livré | Comparaison multi-modèles et évaluation admin dans le code. Parcours distant non vérifié. |
-| 8. Validation fal réelle | ☑ Validée hors application | Appels Playground Kling, Veo et LLM documentés. Total **0,952866 USD** sur 2,00 USD. L’intégration dans l’application reste à valider; aucun nouvel appel payant prévu. |
-| 9. Vérification et mise en service | ☐ En attente | 31 tests unitaires, lint, TypeScript et build locaux passent; secrets absents du dépôt; garde-fou E2E local ajouté. E2E n’a pas réussi ici. Le dépôt GitHub est vide, la branche n’y est pas publiée et Vercel ne montre aucun déploiement. |
+| 0. Socle | ☑ Livré | Next.js App Router, TypeScript, Supabase, interface française, migrations, seed et CI. Les contrôles de la CI GitHub passent. |
+| 1. Accès | ◷ Invitation envoyée | Invitation Supabase envoyée à `oury@odk-agency.com`. Elle doit être acceptée et le mot de passe défini par le destinataire. Le premier profil reçoit le rôle admin. |
+| 2. Médias | ◷ Code livré, médias à charger | La médiathèque utilise les buckets Supabase privés. Aucun logo ni photo véhicule RIMCO validé n’est fourni par le seed; les charger puis les valider depuis l’application. |
+| 3. Génération | ◷ Prête à tester en live | Mode live activé dans Preview. Le parcours réel génération → stockage → post-production n’a pas encore été exécuté dans l’application. |
+| 4. Validation et édition | Hors périmètre V1 | L’écran de validation est redirigé vers la bibliothèque. Il n’y a ni approbation ni édition par phrase dans le flux V1. |
+| 5. Bibliothèque | ☑ Code livré | Les vidéos prêtes sont lisibles et téléchargeables par leur créateur. Le parcours réel reste à vérifier après activation du compte et ajout des médias. |
+| 6. Budget et coûts | ☑ Code livré | Réservation transactionnelle, suivi et règles de prix présentes. Le budget fal externe a déjà consommé 0,952866 USD sur 2 USD; un seul essai d’application reste autorisé (maximum 1,047134 USD). |
+| 7. Vérifications | ☑ CI, ◷ parcours live | `checks` (lint, types, tests, build) et E2E passent dans GitHub Actions. Preview et Production sont READY. La génération réelle depuis l’application est en attente du compte et des médias. |
 
-## État des services
+## Services
 
-- **Supabase** — le projet `Rimco studio` (`hqgxhdekbifyranijvbq`) a reçu `supabase/setup.sql`; le seed RIMCO et les tables ont été contrôlés. L’écran Auth confirme que l’inscription publique est activée; le responsable doit confirmer avant sa désactivation. Le premier compte administrateur, le logo, une photo et une piste audio de marque restent à créer ou valider.
-- **Vercel** — projet `rimcostudio` existant, actuellement rattaché à l’équipe Hobby. `FAL_KEY` est stockée comme secret en Production, Preview et Development; `PROVIDERS_MODE` reste `mock`. L’écran Vercel ne trouve ni `CRON_SECRET` ni `FAL_WEBHOOK_SECRET`; les variables Supabase sont confirmées en Production, mais leur présence complète en Preview n’est pas vérifiée. La consultation des variables via l’API Vercel a répondu 403.
-- **GitHub** — le connecteur ChatGPT Codex est installé sur le compte `oury-hash` et son accès est limité au seul dépôt privé `oury-hash/rimcostudio` (vérifié dans Chrome et dans le connecteur GitHub). Le dépôt est vide; la branche complète `codex/rimco-v1` et ses commits existent uniquement en local. Aucune PR ni CI distante n’est possible avant publication de la branche.
-- **Déploiement** — la liste Vercel du projet ne contient aucun déploiement. Le premier déploiement devra être déclenché après l’arrivée du code sur GitHub et le contrôle des variables Preview. Le plan Hobby est signalé comme non adapté au pilote commercial; vérifier un plan approprié avant tout déploiement de production.
-- **Sécurité de clé** — la clé fal a été partagée dans le chat par son propriétaire, puis stockée dans Vercel. Elle doit être révoquée et remplacée après validation contrôlée.
+- **GitHub** — PR #1 et PR #3 sont fusionnées sur `main`. La PR #3 retire le parcours de validation de l’interface et met la route `/validation` en redirection vers la bibliothèque.
+- **Vercel** — projet `rimcostudio`. Le déploiement Production du commit `984e0064525d6e8f76fd811c7d937cf8a1cf03eb` est READY. Le déploiement Preview de la branche `codex/rimco-v1-copy-and-route` est READY. `PROVIDERS_MODE=live` est défini pour les environnements de préproduction; FAL, Supabase et le modèle LLM y sont configurés. Production reste en mode mock par défaut.
+- **Supabase** — projet `Rimco studio` (`hqgxhdekbifyranijvbq`), schéma et seed en place. L’invitation Auth à `oury@odk-agency.com` a été envoyée; l’utilisateur n’a pas encore accepté. Aucun média n’est présent dans le seed.
+- **Fournisseurs** — la clé FAL communiquée dans la conversation est enregistrée dans Vercel. La rotation de la clé FAL et de la clé Supabase de service est à effectuer après le test, puis Vercel doit être mis à jour.
 
-## Vérifications
+## Contrôles vérifiés
 
-- `pnpm lint` : réussi.
-- `pnpm typecheck` : réussi.
-- `pnpm test` : réussi, 31 tests sur 10 fichiers.
-- `pnpm build` : réussi sur l’état actuel; les routes Next.js et les pages ont été générées, y compris les fonctions qui embarquent FFmpeg.
-- `pnpm test:e2e` : non validé dans cet environnement. Docker/Supabase local et l’écoute du serveur Playwright sont indisponibles (`EPERM` sur `127.0.0.1:3000`). La CI décrit l’exécution E2E avec Supabase local; aucun run GitHub n’est observable tant que le dépôt reste vide.
-- `git ls-files '.env*'` : seul `.env.example` est suivi. Recherche d’une clé fournisseur dans les fichiers du dépôt : aucune occurrence.
+- CI GitHub, run `37780443278` : jobs `checks` et `e2e` réussis.
+- Déploiements Vercel Preview et Production : état `READY`.
+- Génération réelle dans l’application : pas encore vérifiée; elle nécessite le compte activé, une photo véhicule validée et un logo RIMCO validé.
+- Aucun nouvel appel payant fal n’a été lancé dans l’application. Un seul essai reste dans le plafond autorisé.
 
-## À terminer pour une V1 réellement utilisable
+## Étapes pour terminer le test réel
 
-1. Rendre la branche locale disponible dans le dépôt privé GitHub, puis créer et faire relire la PR avant fusion.
-2. Le responsable doit saisir `CRON_SECRET` et `FAL_WEBHOOK_SECRET` comme secrets dans Vercel (Production et Preview), et vérifier les variables Supabase Preview. Ces deux secrets sont absents.
-3. Contrôler la CI, notamment E2E, puis déployer en Preview.
-4. Créer le premier administrateur et charger/valider les médias RIMCO.
-5. Exécuter un seul parcours live en Preview dans le budget fal déjà autorisé, de la génération jusqu’au téléchargement; aucun nouvel appel fal ne doit dépasser le plafond cumulé documenté de 2 USD.
-6. Remplacer la clé fal exposée dans la conversation après l’essai; vérifier le plan Vercel commercial avant la mise en production.
+1. Accepter l’invitation Supabase et définir un mot de passe.
+2. Se connecter au Preview et charger un logo RIMCO et une photo de véhicule autorisés, puis valider ces médias.
+3. Lancer une seule génération Standard et vérifier le traitement, la lecture et le téléchargement, sans dépasser le solde fal restant autorisé de 1,047134 USD.
+4. Révoquer/remplacer les clés FAL et Supabase de service exposées, puis actualiser les secrets Vercel.
+5. Vérifier les conditions du plan Vercel avant tout usage client commercial.

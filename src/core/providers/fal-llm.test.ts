@@ -38,4 +38,18 @@ describe('fal LLM brief adapter', () => {
     await expect(createFalLlmProvider(call).buildBrief('SUV bleu', { vehicle_asset_id: 'asset-1' })).rejects.toThrow('après une nouvelle tentative');
     expect(call).toHaveBeenCalledTimes(2);
   });
+
+  it('preserves reported LLM cost when all completed responses fail validation', async () => {
+    const call = vi.fn()
+      .mockResolvedValueOnce({ output: '{bad json', usage: { cost: 0.012 } })
+      .mockResolvedValueOnce({ output: '{still bad', usage: { cost: 0.018 } });
+    const error = await createFalLlmProvider(call).buildBriefWithCost('SUV bleu', { vehicle_asset_id: 'asset-1' }).catch((cause: unknown) => cause);
+    expect(error).toMatchObject({ completedRequests: 2, reportedCostUsd: 0.03 });
+  });
+
+  it('marks a rejected request as uncompleted so its budget reservation can be released', async () => {
+    const call = vi.fn().mockRejectedValue(new Error('Network error'));
+    const error = await createFalLlmProvider(call).buildBriefWithCost('SUV bleu', { vehicle_asset_id: 'asset-1' }).catch((cause: unknown) => cause);
+    expect(error).toMatchObject({ completedRequests: 0, reportedCostUsd: null });
+  });
 });

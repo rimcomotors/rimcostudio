@@ -1,8 +1,21 @@
 @import "tailwindcss";
-:root{--brand-red:#c51e1c;--brand-burgundy:#831810;--ink:#253b4e;--background:#f5f5f3;--surface:#fbfbfa;--muted:#716d66;--border:#e4e1db;--focus:#c51e1c}
-html{scrollbar-gutter:stable}
-body{background:var(--background);color:#302e2b;font-family:"Helvetica Neue",Helvetica,Arial,sans-serif}
-h1,h2,h3{font-family:var(--font-display),"Arial Narrow",sans-serif;font-weight:400;letter-spacing:.015em}
-button,a,input,select,textarea{transition:color 180ms ease,background-color 180ms ease,border-color 180ms ease,box-shadow 180ms ease}
-:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+:root {
+  --brand-red: #c51e1c;
+  --brand-burgundy: #831810;
+  --ink: #161619;
+  --background: #f7f7f8;
+  --surface: #ffffff;
+  --muted: #626269;
+  --border: #e2e2e5;
+  --focus: #c51e1c;
+}
+
+html { scrollbar-gutter: stable; }
+body { background: var(--background); color: var(--ink); font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; }
+h1, h2, h3 { font-family: var(--font-display), "Arial Narrow", sans-serif; font-weight: 400; letter-spacing: .015em; }
+button, a, input, select, textarea { transition: color 180ms ease, background-color 180ms ease, border-color 180ms ease, box-shadow 180ms ease; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

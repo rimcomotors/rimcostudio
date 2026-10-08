@@ -1,71 +1,57 @@
 ---
 name: RIMCO Studio
-description: Interface de production vidéo automobile interne, conçue comme un atelier de précision expert, rassurant et premium.
+description: Outil interne de génération et de consultation de vidéos automobiles, inspiré des captures produit de la présentation RIMCO Studio.
 colors:
   brand: "#c51e1c"
   brand-dark: "#831810"
-  ink: "#253b4e"
-  background: "#f5f5f3"
-  surface: "#fbfbfa"
-  muted: "#716d66"
-  border: "#e4e1db"
+  ink: "#161619"
+  background: "#f7f7f8"
+  surface: "#ffffff"
+  muted: "#626269"
+  border: "#e2e2e5"
   focus: "#c51e1c"
 typography:
   display: Bebas Neue
   body: "Helvetica Neue, Helvetica, Arial, sans-serif"
 ---
 
-# Overview
+# Direction visuelle
 
-RIMCO Studio est un outil de production interne pour générer des vidéos automobiles, les visionner et télécharger leur MP4. La V1 ne comprend ni édition après génération ni validation des vidéos générées. Son registre est celui de l’atelier de précision : une interface experte et rassurante qui met le véhicule, les décisions de production et le coût au premier plan. Le rouge RIMCO porte l’identité et les actions importantes ; le bleu ardoise structure les informations. Les surfaces restent plates, calmes et séparées par des tons et des traits fins. L’interface est entièrement en français et vise WCAG 2.2 AA, la navigation clavier et la préférence de mouvement réduit.
+La référence est constituée par les captures du Studio et de la bibliothèque présentes dans la présentation de la plateforme. L’interface produit reste claire, compacte et focalisée sur la tâche : fond de travail gris très pâle, navigation blanche, texte noir, traits fins et rouge RIMCO pour la sélection et l’action principale. Les diapositives noires et leurs accents violets servent au récit de présentation, pas au thème de l’application.
 
-# Colors
+Le véhicule et son aperçu vidéo occupent la place visuelle principale lorsqu’un média est disponible. Les commandes de génération sont regroupées dans un panneau de travail; l’état et le prix sont faciles à repérer. Les surfaces sont plates et calmes, sans grilles décoratives, dégradés ou ombres larges. Le ton reste expert, rassurant et premium.
+
+# Couleurs
 
 | Token | Valeur | Usage |
 | --- | --- | --- |
-| Brand red | `#c51e1c` | Navigation active, actions principales, état de marque |
-| Brand burgundy | `#831810` | Surfaces rouges profondes et contraste de navigation |
-| Ink | `#253b4e` | Titres, navigation secondaire et structure |
-| Background | `#f5f5f3` | Fond général légèrement chaud |
-| Surface | `#fbfbfa` | Zones de saisie et surfaces de travail |
-| Muted | `#716d66` | Texte secondaire lisible |
-| Border | `#e4e1db` | Séparateurs et contours discrets |
-| Focus | `#c51e1c` | Anneau de focus clavier visible |
+| Rouge RIMCO | `#c51e1c` | Bouton principal, sélection, repère de marque |
+| Bordeaux | `#831810` | Liens d’action secondaires et accents de marque |
+| Encre | `#161619` | Titres, texte principal et structure |
+| Fond | `#f7f7f8` | Fond général de l’espace de travail |
+| Surface | `#ffffff` | Navigation, formulaires et aperçu des données |
+| Texte secondaire | `#626269` | Aide et métadonnées lisibles |
+| Trait | `#e2e2e5` | Séparateurs et contours fins |
+| Focus | `#c51e1c` | Repère clavier visible |
 
-Utiliser le rouge avec intention et assez de présence pour rendre l’identité reconnaissable. Le bleu ardoise garde la hiérarchie lisible et le rouge ne remplace pas les libellés ou les états textuels. Contrôler le contraste de chaque paire de couleurs dans son contexte d’usage.
+Réserver le rouge aux actions et sélections. Les états gardent un libellé textuel pour ne pas dépendre de la couleur. Vérifier le contraste de chaque paire dans son contexte.
 
-# Typography
+# Typographie
 
-Les titres utilisent Bebas Neue, avec une casse simple et une hiérarchie nette. Les textes, contrôles et données utilisent Helvetica Neue, Helvetica, Arial, sans-serif. Les prix FCFA et les états doivent rester faciles à parcourir ; ne pas employer la police d’affichage pour les paragraphes ou les petits libellés.
+Les grands titres peuvent utiliser Bebas Neue avec une hiérarchie nette, comme dans les captures. Helvetica Neue, Helvetica ou Arial servent aux textes, champs, boutons et données. Les prix FCFA et les états restent lisibles et compacts.
 
-# Elevation
+# Composants
 
-Le système privilégie les surfaces plates, les fonds légèrement teintés et les traits fins. Les ombres servent uniquement à signaler une superposition réelle, par exemple un menu flottant. Éviter les dégradés décoratifs, le verre, les panneaux empilés et les ombres larges.
+- **Navigation** : barre latérale blanche avec marque rouge, icônes sobres et sélection sur fond rouge très pâle; navigation horizontale défilable sur mobile.
+- **Bouton principal** : fond rouge RIMCO, libellé explicite, états désactivé et chargement compréhensibles.
+- **Bouton secondaire** : fond blanc, trait fin, texte noir; réservé aux actions de moindre priorité.
+- **Champs** : libellé visible, aide et erreur associées, focus rouge clairement perceptible.
+- **Médias** : conserver leur ratio, privilégier les photos réelles de véhicule et ne jamais déformer, dégrader ou recolorer le logo.
+- **État** : associer couleur et texte; afficher la progression de génération sans ambiguïté.
+- **Données** : tableaux compacts, montants alignés, FCFA sans décimales et séparateurs de milliers par espace insécable.
 
-# Components
+Tous les contrôles ont des états repos, survol, focus, désactivé, erreur et chargement lorsque cela s’applique. Respecter la navigation clavier, WCAG 2.2 AA et `prefers-reduced-motion`.
 
-- **Navigation** : menu latéral bordeaux sur grand écran, avec libellé visible, repère actif et icône SVG simple ; navigation compacte et défilable sur mobile.
-- **Bouton principal** : rouge RIMCO, texte explicite, état de focus visible et états désactivé/en chargement compréhensibles.
-- **Bouton secondaire** : surface neutre, contour fin, texte encre ; réservé aux actions de moindre priorité.
-- **Champ** : libellé toujours visible, aide et erreur associées au champ, contour de focus net.
-- **État** : associer une couleur à un mot ou une icône ; ne jamais compter sur la couleur seule.
-- **Média** : conserver le ratio de la source et le logo officiel sans déformation, dégradé ni recoloration.
-- **Données** : tableaux compacts, alignement stable des montants, FCFA sans décimales et séparateurs de milliers par espace insécable.
+# Périmètre V1
 
-Tous les contrôles interactifs définissent les états repos, survol, focus, désactivé, erreur et chargement lorsque cela s’applique. Le mouvement reste bref et fonctionnel ; respecter `prefers-reduced-motion`.
-
-# Do’s and Don’ts
-
-**À faire**
-
-- Montrer clairement l’étape de production, le responsable, le statut et le coût pertinent pour le rôle.
-- Donner une rétroaction immédiate après une action et préserver le contexte de travail.
-- Utiliser des icônes SVG sobres accompagnées de libellés lorsqu’une action n’est pas universelle.
-- Rendre explicites les étapes de génération, de lecture et de téléchargement.
-
-**À éviter**
-
-- Les grilles répétitives de cartes KPI et les compositions SaaS génériques ou décoratives.
-- Les emoji utilisés comme icônes, les modales sans nécessité et les contrôles sans libellé.
-- Les indicateurs de statut uniquement colorés, les animations non essentielles et les mouvements qui ignorent la préférence système.
-- Toute transformation du logo RIMCO ou tout changement de couleur du véhicule par le prompt.
+L’interface V1 permet de préparer une génération, suivre son état, consulter la vidéo terminée et télécharger le MP4. Les écrans de validation de vidéo et de modification par phrase ne font pas partie de cette version.

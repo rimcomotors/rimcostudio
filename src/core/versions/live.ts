@@ -4,7 +4,7 @@ import type { Brief } from '@/core/brief';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { wanVideoProvider, WAN_ENDPOINT } from '@/core/providers/fal-wan';
 import { veoVideoProvider, VEO_ENDPOINT } from '@/core/providers/fal-veo';
-import { buildFalBriefWithCost } from '@/core/providers/fal-llm';
+import { buildFalBriefWithCost, FalLlmBriefError } from '@/core/providers/fal-llm';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
@@ -77,6 +77,8 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     brief = options.reuse.brief;
     prompt = options.reuse.prompt;
   } else {
+  let llmCallCompleted = false;
+  let llmReportedCostUsd: number | null = null;
   const { data: llmLedgerId, error: llmReserveError } = await admin.rpc('reserve_llm_budget', {
     p_user_id: actor.id, p_version_id: version.id, p_max_cost_usd: llmReserveUsd,
     p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA,
@@ -93,6 +95,8 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
 
   try {
     const generated = await buildFalBriefWithCost(input.description, briefOptions);
+    llmCallCompleted = true;
+    llmReportedCostUsd = generated.costUsd;
     brief = generated.brief as Brief;
     if (!model.allowed_formats?.includes(brief.format)) throw new HttpError(422, `Le modèle ne prend pas en charge le format ${brief.format}.`);
     prompt = briefToPrompt(brief, model.adapter_family);
@@ -103,7 +107,17 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   } catch (briefError) {
     const message = briefError instanceof HttpError ? briefError.message : 'Le brief n’a pas pu être préparé. Vérifiez le fournisseur LLM puis réessayez.';
     if (!(briefError instanceof HttpError && message.startsWith('Le coût du brief LLM'))) {
-      await admin.rpc('settle_budget', { p_entry_id: llmLedgerId, p_outcome: 'charged', p_actual_cost_usd: llmReserveUsd, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: env.BUDGET_CAP_EUR });
+      const completedRequests = briefError instanceof FalLlmBriefError ? briefError.completedRequests : 0;
+      const reportedCostUsd = llmReportedCostUsd ?? (briefError instanceof FalLlmBriefError ? briefError.reportedCostUsd : null);
+      const completed = llmCallCompleted || completedRequests > 0;
+      await admin.rpc('settle_budget', {
+        p_entry_id: llmLedgerId,
+        p_outcome: completed ? 'charged' : 'released',
+        p_actual_cost_usd: completed ? reportedCostUsd ?? llmReserveUsd : 0,
+        p_usd_to_eur: env.USD_TO_EUR_RATE,
+        p_eur_to_fcfa: env.EUR_TO_FCFA,
+        p_cap_eur: env.BUDGET_CAP_EUR,
+      });
     }
     await Promise.all([
       admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: env.BUDGET_CAP_EUR }),

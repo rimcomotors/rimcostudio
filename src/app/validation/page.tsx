@@ -1,2 +1,5 @@
-import {redirect} from 'next/navigation';
-export default function ValidationPage(){redirect('/bibliotheque')}
+import { redirect } from 'next/navigation';
+
+export default function ValidationPage() {
+  redirect('/bibliotheque');
+}

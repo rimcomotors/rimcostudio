@@ -6,6 +6,12 @@ import type { Brief } from '@/core/brief';
 import type { LlmProvider } from './contracts';
 
 export const FAL_LLM_ENDPOINT = 'openrouter/router';
+export class FalLlmBriefError extends Error {
+  constructor(message: string, readonly completedRequests: number, readonly reportedCostUsd: number | null) {
+    super(message);
+    this.name = 'FalLlmBriefError';
+  }
+}
 const fields = ['location', 'setting', 'character', 'lighting', 'camera_movement', 'mood', 'format'] as const;
 const fieldNames = fields.join(', ');
 const systemPrompt = `Tu es le directeur de création vidéo automobile de RIMCO. Tu comprends une demande en français et renvoies uniquement un objet JSON valide, sans markdown. Les valeurs textuelles doivent être en français. Les seules clés autorisées sont: ${fieldNames}. Renseigne toutes ces clés pour le brief initial. format doit être l'une de: 16:9, 9:16, 1:1, 4:5. Ne crée jamais de description de véhicule, ne change jamais son identité, sa marque, son modèle ni sa couleur: la photo choisie est la seule référence. Durée fixe: 5 secondes. Propose un lieu, un décor simple, un mouvement caméra réalisable, une lumière douce de début ou fin de journée, des personnages naturels et une ambiance premium.`;
@@ -44,14 +50,16 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
   let lastIssue = 'La réponse ne respecte pas le format attendu.';
   let costUsd = 0;
   let hasReportedCost = false;
+  let completedRequests = 0;
   for (let attempt = 0; attempt < 2; attempt += 1) {
       const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire: la réponse précédente était invalide (${lastIssue}). Renvoie un objet JSON valide avec uniquement les clés autorisées: ${fieldNames}.`;
     let response: unknown;
     try {
       response = await call(request, systemPrompt);
     } catch {
-      throw new Error('L’appel au fournisseur LLM a échoué.');
+      throw new FalLlmBriefError('L’appel au fournisseur LLM a échoué.', completedRequests, hasReportedCost ? costUsd : null);
     }
+    completedRequests += 1;
     const reportedCost = responseCost(response);
     if (reportedCost !== null) {
       costUsd += reportedCost;
@@ -65,7 +73,7 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
       lastIssue = error instanceof Error ? error.message : 'Réponse invalide.';
     }
   }
-  throw new Error(`Impossible de construire un brief vidéo valide après une nouvelle tentative : ${lastIssue}`);
+  throw new FalLlmBriefError(`Impossible de construire un brief vidéo valide après une nouvelle tentative : ${lastIssue}`, completedRequests, hasReportedCost ? costUsd : null);
 }
 
 function responseCost(response: unknown): number | null {
