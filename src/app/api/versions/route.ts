@@ -11,6 +11,10 @@ import { createPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSignedVideoDownloadUrl } from '@/core/storage/signed-video';
 import { getScenePreset } from '@/core/scenes/catalog';
+import { z } from 'zod';
+import { deleteVersionsByVideoIds } from '@/core/versions/store';
+
+const deleteSchema = z.object({ videoIds: z.array(z.string().uuid()).min(1).max(50) }).strict().refine((input) => new Set(input.videoIds).size === input.videoIds.length, { message: 'La sélection contient des doublons.' });
 
 export async function GET(request: Request) {
   try {
@@ -78,5 +82,53 @@ export async function POST(request: Request) {
     const id = crypto.randomUUID();
     const record = putVersion({ id, videoId: crypto.randomUUID(), number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: estimatePriceFcfa(5, input.tier), createdAt: new Date().toISOString() });
     return NextResponse.json({ id: record.id, status: record.status, prompt, estimatedPriceFcfa: record.priceFcfa, version: 1 }, { status: 201 });
+  } catch (error) { return errorResponse(error); }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const actor = await getActor();
+    if (actor.role === 'valideur') throw new HttpError(403, 'Les valideurs ne peuvent pas supprimer de vidéos.');
+    const parsed = deleteSchema.safeParse(await request.json());
+    if (!parsed.success) throw new HttpError(422, 'Sélection de vidéos invalide. Choisissez jusqu’à 50 vidéos.');
+    const { videoIds } = parsed.data;
+
+    if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
+      const selectedRecords = allVersions().filter((record) => videoIds.includes(record.videoId));
+      if (selectedRecords.length !== videoIds.length || selectedRecords.some((record) => actor.role !== 'admin' && record.userId !== actor.id)) {
+        throw new HttpError(404, 'Certaines vidéos sélectionnées sont introuvables. Actualisez la Bibliothèque.');
+      }
+      if (selectedRecords.some((record) => ['queued', 'generating', 'postprocessing'].includes(record.status))) {
+        throw new HttpError(409, 'Une vidéo est encore en cours de génération et ne peut pas être supprimée.');
+      }
+      deleteVersionsByVideoIds(videoIds);
+      return NextResponse.json({ deleted: videoIds.length });
+    }
+
+    const admin = createStorageAdminClient();
+    let query = admin.from('videos').select('id,user_id,status,video_versions(status,raw_path,final_path)').in('id', videoIds);
+    if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
+    const { data: videos, error: queryError } = await query;
+    if (queryError) throw queryError;
+    if (!videos || videos.length !== videoIds.length) {
+      throw new HttpError(404, 'Certaines vidéos sélectionnées sont introuvables. Actualisez la Bibliothèque.');
+    }
+    const isInProgress = videos.some((video) => video.status === 'generating' ||
+      (Array.isArray(video.video_versions) && video.video_versions.some((version) => ['queued', 'generating', 'postprocessing'].includes(version.status))));
+    if (isInProgress) throw new HttpError(409, 'Une vidéo est encore en cours de génération et ne peut pas être supprimée.');
+
+    const paths = [...new Set(videos.flatMap((video) => Array.isArray(video.video_versions)
+      ? video.video_versions.flatMap((version) => [version.raw_path, version.final_path].filter((path): path is string => Boolean(path)))
+      : []))];
+    if (paths.length) {
+      const { error: storageError } = await admin.storage.from('videos').remove(paths);
+      if (storageError) throw storageError;
+    }
+    let deleteQuery = admin.from('videos').delete().in('id', videoIds);
+    if (actor.role === 'collaborateur') deleteQuery = deleteQuery.eq('user_id', actor.id);
+    const { data: deletedRows, error: deleteError } = await deleteQuery.select('id');
+    if (deleteError) throw deleteError;
+    if ((deletedRows ?? []).length !== videoIds.length) throw new HttpError(409, 'La suppression n’a pas pu être appliquée à toute la sélection. Actualisez la Bibliothèque.');
+    return NextResponse.json({ deleted: deletedRows.length });
   } catch (error) { return errorResponse(error); }
 }
