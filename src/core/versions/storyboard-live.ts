@@ -4,7 +4,7 @@ import { buildBrief } from '@/core/brief';
 import { KLING_ENDPOINT, klingVideoProvider } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSupabaseServerClient } from '@/core/supabase/server';
-import { effectiveBudgetCapEur, env } from '@/env';
+import { env } from '@/env';
 import { calculateClientPriceFcfa } from '@/core/pricing';
 import { shotToPrompt, type StoryboardShot } from '@/core/storyboard';
 import { assembleShotMontage } from '@/core/postproduction/pipeline';
@@ -70,12 +70,12 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const { data: ledgerId, error: reserveError } = await admin.rpc('reserve_budget', {
     p_user_id: actor.id, p_version_id: version.id, p_model_id: model.id, p_seconds: SHOT_COUNT * SHOT_DURATION_SECONDS,
     p_price_usd_second: Number(model.price_usd_per_second), p_usd_to_eur: env.USD_TO_EUR_RATE,
-    p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa, p_cap_eur: effectiveBudgetCapEur,
+    p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa,
     p_department: actor.department, p_applied_fcfa_second: priceFcfa / (SHOT_COUNT * SHOT_DURATION_SECONDS),
   });
   if (reserveError || !ledgerId) {
     await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
-    throw new HttpError(reserveError?.message.includes('Plafond') ? 409 : 503, reserveError?.message.includes('Plafond') ? 'Le budget métier disponible est atteint. Aucun plan n’a été lancé.' : 'Impossible de réserver le budget du montage.');
+    throw new HttpError(503, 'Impossible d’enregistrer le suivi de coûts du montage.');
   }
 
   const shotRows = input.storyboard.map((shot, index) => ({
@@ -85,7 +85,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const { error: shotsInsertError } = await admin.from('video_shots').insert(shotRows);
   if (shotsInsertError) {
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur }),
+      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: 'Impossible d’enregistrer les plans.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
@@ -107,7 +107,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   }
   if (!submitted) {
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur }),
+      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: 'Aucun plan n’a pu démarrer.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
@@ -167,7 +167,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
     const actualCostUsd = completedShots * SHOT_DURATION_SECONDS * priceUsdPerSecond;
     const { error: settleError } = await admin.rpc('settle_budget', {
       p_entry_id: ledger.id, p_outcome: outcome, p_actual_cost_usd: actualCostUsd,
-      p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur,
+      p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA,
     });
     if (settleError) throw new HttpError(503, 'La consommation fal doit être réconciliée avant de terminer le montage.');
   }
