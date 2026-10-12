@@ -67,7 +67,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const videoTitle = input.title || `${asset.make ?? ''} ${asset.model ?? 'Véhicule'} · Nouvelle création`.trim();
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: videoTitle, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: initialBrief, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
+  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: { ...initialBrief, overlayLogo: input.overlayLogo }, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
   if (versionError || !version) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
@@ -115,7 +115,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     prompt = briefToPrompt(brief, model.adapter_family);
     const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: llmLedgerId, p_outcome: 'charged', p_actual_cost_usd: generated.costUsd ?? llmReserveUsd, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA });
     if (settleError) throw new HttpError(503, 'Le coût du brief LLM doit être réconcilié avant de lancer la vidéo.');
-    const { error: briefUpdateError } = await admin.from('video_versions').update({ brief_json: brief, generated_prompt: prompt }).eq('id', version.id);
+    const { error: briefUpdateError } = await admin.from('video_versions').update({ brief_json: { ...brief, overlayLogo: input.overlayLogo }, generated_prompt: prompt }).eq('id', version.id);
     if (briefUpdateError) throw new HttpError(503, 'Le brief est facturé mais n’a pas pu être enregistré. Réessayez depuis l’administration.');
   } catch (briefError) {
     const message = briefError instanceof HttpError ? briefError.message : 'Le brief n’a pas pu être préparé. Vérifiez le fournisseur LLM puis réessayez.';
