@@ -10,10 +10,13 @@ describe('FFmpeg final video arguments', () => {
   it('overlays the RIMCO logo at the upper left and keeps the requested duration', () => {
     const args = makeFinalVideoArgs({ rawFile: '/tmp/raw.mp4', logoFile: '/app/public/brand/logo-rimco.png', outputFile: '/tmp/final.mp4', durationSeconds: 15, overlayLogo: true, audioFile: null });
     expect(args).toContain('/app/public/brand/logo-rimco.png');
+    expect(args).toContain('-loop');
+    expect(args).toContain('1');
     expect(args).toContain('[1:v:0][0:v:0]scale2ref=w=main_w*0.14:h=-1[logo][base];[base][logo]overlay=x=main_w*0.04:y=main_h*0.04:eof_action=repeat[vout]');
     expect(args).toContain('libx264');
     expect(args).toContain('15');
     expect(args).toContain('[vout]');
+    expect(args).toContain('-loop');
     expect(args).toContain('-an');
   });
 
