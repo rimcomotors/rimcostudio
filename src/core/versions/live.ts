@@ -8,7 +8,7 @@ import { seedanceVideoProvider, SEEDANCE_ENDPOINT } from '@/core/providers/fal-s
 import { buildFalBriefWithCost, FalLlmBriefError } from '@/core/providers/fal-llm';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSupabaseServerClient } from '@/core/supabase/server';
-import { env, effectiveBudgetCapEur } from '@/env';
+import { env } from '@/env';
 import { HttpError } from '@/core/auth/guards';
 import type { z } from 'zod';
 import { requestSchema } from './request-schema';
@@ -75,12 +75,12 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const { data: ledgerId, error: reserveError } = await admin.rpc('reserve_budget', {
     p_user_id: actor.id, p_version_id: version.id, p_model_id: model.id, p_seconds: sourceDurationS,
     p_price_usd_second: Number(model.price_usd_per_second), p_usd_to_eur: env.USD_TO_EUR_RATE,
-    p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa, p_cap_eur: effectiveBudgetCapEur,
+    p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa,
     p_department: actor.department, p_applied_fcfa_second: fcfaPerSecond,
   });
   if (reserveError || !ledgerId) {
     await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
-    throw new HttpError(reserveError?.message.includes('Plafond') ? 409 : 503, reserveError?.message.includes('Plafond') ? 'Le plafond de coût réel est atteint. Aucune génération n’a été lancée.' : 'Impossible de réserver le budget pour cette génération.');
+    throw new HttpError(503, 'Impossible de réserver le suivi de coûts de la génération.');
   }
 
   const llmReserveUsd = 2 * (env.LLM_MAX_COST_USD ?? 0);
@@ -95,15 +95,15 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const { data: llmLedgerId, error: llmReserveError } = await admin.rpc('reserve_llm_budget', {
     p_user_id: actor.id, p_version_id: version.id, p_max_cost_usd: llmReserveUsd,
     p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA,
-    p_cap_eur: effectiveBudgetCapEur, p_department: actor.department,
+    p_department: actor.department,
   });
   if (llmReserveError || !llmLedgerId) {
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur }),
-      admin.from('video_versions').update({ status: 'failed', error_message: 'Le plafond ne permet pas de réserver le brief LLM.' }).eq('id', version.id),
+      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
+      admin.from('video_versions').update({ status: 'failed', error_message: 'Le brief LLM n’a pas pu être réservé.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
-    throw new HttpError(llmReserveError?.message.includes('Plafond') ? 409 : 503, llmReserveError?.message.includes('Plafond') ? 'Le plafond de coût réel est atteint. Aucune requête LLM n’a été lancée.' : 'Impossible de réserver le budget du brief LLM.');
+    throw new HttpError(503, 'Impossible de réserver le suivi de coût du brief LLM.');
   }
 
   try {
@@ -113,7 +113,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     brief = generated.brief as Brief;
     if (!model.allowed_formats?.includes(brief.format)) throw new HttpError(422, `Le modèle ne prend pas en charge le format ${brief.format}.`);
     prompt = briefToPrompt(brief, model.adapter_family);
-    const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: llmLedgerId, p_outcome: 'charged', p_actual_cost_usd: generated.costUsd ?? llmReserveUsd, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur });
+    const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: llmLedgerId, p_outcome: 'charged', p_actual_cost_usd: generated.costUsd ?? llmReserveUsd, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA });
     if (settleError) throw new HttpError(503, 'Le coût du brief LLM doit être réconcilié avant de lancer la vidéo.');
     const { error: briefUpdateError } = await admin.from('video_versions').update({ brief_json: brief, generated_prompt: prompt }).eq('id', version.id);
     if (briefUpdateError) throw new HttpError(503, 'Le brief est facturé mais n’a pas pu être enregistré. Réessayez depuis l’administration.');
@@ -129,11 +129,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
         p_actual_cost_usd: completed ? reportedCostUsd ?? llmReserveUsd : 0,
         p_usd_to_eur: env.USD_TO_EUR_RATE,
         p_eur_to_fcfa: env.EUR_TO_FCFA,
-        p_cap_eur: effectiveBudgetCapEur,
       });
     }
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur }),
+      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: message }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
@@ -147,7 +146,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6 | 10 | 15 | 20 | 30, format: input.format, endUserId: actor.id }));
   } catch {
     await Promise.all([
-      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur }),
+      admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA }),
       admin.from('video_versions').update({ status: 'failed', error_message: 'Impossible de soumettre la génération au fournisseur.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
@@ -213,14 +212,14 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   if (status.status === 'ready') {
     const { data: ledger } = await admin.from('usage_ledger').select('id,cost_usd').eq('version_id', versionId).eq('status', 'reserved').maybeSingle();
     if (ledger) {
-      const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledger.id, p_outcome: 'charged', p_actual_cost_usd: ledger.cost_usd, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur });
+      const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledger.id, p_outcome: 'charged', p_actual_cost_usd: ledger.cost_usd, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA });
       if (settleError) throw new HttpError(503, 'La vidéo est générée mais la clôture du budget doit être réconciliée par l’administrateur.');
     }
   }
   if (status.status === 'failed') {
     const { data: ledger } = await admin.from('usage_ledger').select('id').eq('version_id', versionId).eq('status', 'reserved').maybeSingle();
     if (ledger) {
-      const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledger.id, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur });
+      const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledger.id, p_outcome: 'released', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA });
       if (settleError) throw new HttpError(503, 'La réservation de budget doit être réconciliée par l’administrateur.');
     }
   }
