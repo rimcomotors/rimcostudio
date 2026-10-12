@@ -18,7 +18,7 @@ type MontageArgs = {
 export function makeFinalVideoArgs(input: FinalVideoArgs) {
   const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', input.rawFile];
   if (input.audioFile) args.push('-stream_loop', '-1', '-i', input.audioFile);
-  if (input.overlayLogo) args.push('-i', input.logoFile);
+  if (input.overlayLogo) args.push('-loop', '1', '-i', input.logoFile);
 
   if (!input.overlayLogo) args.push('-map', '0:v:0', '-c:v', 'copy');
   else {
@@ -38,7 +38,7 @@ export function makeFinalVideoArgs(input: FinalVideoArgs) {
 
 export function makeShotMontageArgs(input: MontageArgs) {
   const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', input.shotFiles[0], '-i', input.shotFiles[1]];
-  if (input.overlayLogo) args.push('-i', input.logoFile);
+  if (input.overlayLogo) args.push('-loop', '1', '-i', input.logoFile);
   const concat = `[0:v:0][1:v:0]concat=n=2:v=1:a=0${input.overlayLogo ? '[base]' : '[vout]'}`;
   if (input.overlayLogo) {
     args.push(
