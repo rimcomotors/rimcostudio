@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { errorResponse, HttpError, requireRole } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { env, effectiveBudgetCapEur } from '@/env';
+import { env } from '@/env';
 import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
 import { listComparisons, saveComparison } from '@/core/comparisons/store';
@@ -87,14 +87,6 @@ export async function POST(request: Request) {
     const supported = (family: string, endpoint: string) => family === 'kling' && endpoint === 'fal-ai/kling-video/o3/pro/image-to-video' || family === 'seedance' && endpoint === 'bytedance/seedance-2.5/image-to-video' || family === 'wan' && endpoint === 'alibaba/wan-3.0/image-to-video' || family === 'veo' && endpoint === 'fal-ai/veo3.1/fast/image-to-video';
     const sourceDuration = (family: string) => family === 'veo' ? 6 : 5;
     if (modelError || !models || models.length !== input.modelIds.length || models.some((model) => !model.is_active || model.mode !== 'image_to_video' || !model.allowed_durations.includes(sourceDuration(model.adapter_family)) || !model.allowed_formats.includes(input.brief.format) || !supported(model.adapter_family, model.fal_endpoint_id))) throw new HttpError(422, 'Sélectionnez 2 ou 3 modèles vidéo actifs, vérifiés et compatibles avec le clip final de cinq secondes et le format choisi.');
-    if (env.PROVIDERS_MODE === 'live') {
-      const { data: ledger, error: ledgerError } = await admin.from('usage_ledger').select('cost_eur').in('status', ['reserved', 'charged']);
-      if (ledgerError) throw new HttpError(503, 'Impossible de vérifier le budget avant la comparaison.');
-      const committedEur = (ledger ?? []).reduce((sum, row) => sum + Number(row.cost_eur), 0);
-      const videoEstimateEur = models.reduce((sum, model) => sum + sourceDuration(model.adapter_family) * Number(model.price_usd_per_second) * env.USD_TO_EUR_RATE, 0);
-      const briefEstimateEur = 2 * (env.LLM_MAX_COST_USD ?? 0) * env.USD_TO_EUR_RATE;
-      if (committedEur + videoEstimateEur + briefEstimateEur > effectiveBudgetCapEur) throw new HttpError(409, 'Le budget disponible ne couvre pas le coût estimé de tous les modèles et du brief. Aucune génération n’a été lancée.');
-    }
     const { data: comparison, error } = await admin.from('comparisons').insert({ user_id: actor.id, brief_json: { ...input, status: env.PROVIDERS_MODE === 'live' ? 'running' : 'draft', results: [] } }).select('id,user_id,brief_json,created_at').single();
     if (error || !comparison) throw new HttpError(503, 'Impossible d’enregistrer cette comparaison.');
     if (env.PROVIDERS_MODE !== 'live') {
