@@ -57,7 +57,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: input.storyboard };
+  const storedBrief = { ...brief, storyboard: input.storyboard, overlayLogo: input.overlayLogo };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: prompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: model.id, status: 'queued', generation_seconds: 6,
