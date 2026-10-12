@@ -6,7 +6,7 @@ const schema = z.object({
   NEXT_PUBLIC_SUPABASE_URL: z.string().url().optional(),
   NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().optional(), NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().optional(),
   SUPABASE_SERVICE_ROLE_KEY: z.string().optional(), SUPABASE_SECRET_KEY: z.string().optional(),
-  BUDGET_CAP_EUR: z.coerce.number().positive().default(20), USD_TO_EUR_RATE: z.coerce.number().positive().default(0.92),
+  USD_TO_EUR_RATE: z.coerce.number().positive().default(0.92),
   EUR_TO_FCFA: z.coerce.number().positive().default(655.957), APP_URL: z.string().url().optional(),
   FAL_WEBHOOK_SECRET: z.string().optional(), CRON_SECRET: z.string().optional()
 }).superRefine((values, ctx) => {
@@ -25,5 +25,3 @@ const schema = z.object({
 export const env = schema.parse(process.env);
 export const supabaseAnonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 export const supabaseServiceKey = env.SUPABASE_SERVICE_ROLE_KEY ?? env.SUPABASE_SECRET_KEY;
-/** Budget métier RIMCO, indépendant du plafond fournisseur Fal. */
-export const effectiveBudgetCapEur = env.BUDGET_CAP_EUR;
