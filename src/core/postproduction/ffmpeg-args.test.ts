@@ -74,14 +74,16 @@ describe('FFmpeg logo rendering', () => {
     };
     try {
       const audioFile = join(directory, 'music.wav');
-      run(['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=0.5', '-c:a', 'pcm_s16le', audioFile]);
+      // Keep synthetic sources long enough for FFmpeg's Linux encoder to emit
+      // packets consistently (sub-second MP4s can be header-only on some builds).
+      run(['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=880:duration=2', '-c:a', 'pcm_s16le', audioFile]);
       for (const [index, [width, height]] of dimensions.entries()) {
         const rawFile = join(directory, `raw-${index}.mp4`);
         const overlaidFile = join(directory, `logo-${index}.mp4`);
         const plainFile = join(directory, `plain-${index}.mp4`);
-        run(['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x334455:s=${width}x${height}:r=24:d=0.5`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', rawFile]);
-        run(makeFinalVideoArgs({ rawFile, logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: overlaidFile, durationSeconds: 0.5, overlayLogo: true, audioFile: index === 0 ? audioFile : null }));
-        run(makeFinalVideoArgs({ rawFile, logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: plainFile, durationSeconds: 0.5, overlayLogo: false, audioFile: null }));
+        run(['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x334455:s=${width}x${height}:r=24:d=2`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', rawFile]);
+        run(makeFinalVideoArgs({ rawFile, logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: overlaidFile, durationSeconds: 2, overlayLogo: true, audioFile: index === 0 ? audioFile : null }));
+        run(makeFinalVideoArgs({ rawFile, logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: plainFile, durationSeconds: 2, overlayLogo: false, audioFile: null }));
         expect((await stat(overlaidFile)).size).toBeGreaterThan(0);
         expect((await stat(plainFile)).size).toBeGreaterThan(0);
         run(['-hide_banner', '-loglevel', 'error', '-i', overlaidFile, '-f', 'null', '-']);
@@ -90,7 +92,7 @@ describe('FFmpeg logo rendering', () => {
       }
 
       const montageFile = join(directory, 'montage.mp4');
-      run(makeShotMontageArgs({ shotFiles: [join(directory, 'raw-0.mp4'), join(directory, 'raw-0.mp4')], logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: montageFile, overlayLogo: true, durationSeconds: 1 }));
+      run(makeShotMontageArgs({ shotFiles: [join(directory, 'raw-0.mp4'), join(directory, 'raw-0.mp4')], logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: montageFile, overlayLogo: true, durationSeconds: 4 }));
       run(['-hide_banner', '-loglevel', 'error', '-i', montageFile, '-f', 'null', '-']);
       expect((await stat(montageFile)).size).toBeGreaterThan(0);
     } finally {
