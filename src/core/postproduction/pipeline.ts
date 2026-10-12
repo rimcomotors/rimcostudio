@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { makeFinalVideoArgs, makeShotMontageArgs, shouldOverlayLogo } from './ffmpeg-args';
 
 const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const logoFile = join(process.cwd(), 'public', 'brand', 'logo-rimco.png');
 
 type AdminClient = ReturnType<typeof createStorageAdminClient>;
 
@@ -16,7 +18,7 @@ type AdminClient = ReturnType<typeof createStorageAdminClient>;
 export async function beginPostproduction(versionId: string) {
   const admin = createStorageAdminClient();
   const { data: version, error } = await admin.from('video_versions')
-    .select('id,video_id,raw_path,audio_asset_id,generation_seconds,video:videos!inner(id,user_id,brand_id,department)')
+    .select('id,video_id,raw_path,audio_asset_id,generation_seconds,brief_json,video:videos!inner(id,user_id,brand_id,department)')
     .eq('id', versionId).single();
   if (error || !version?.raw_path) throw new HttpError(409, 'La vidéo brute est indisponible pour la post-production.');
   const durationSeconds = Number(version.generation_seconds);
@@ -33,6 +35,11 @@ export async function beginPostproduction(versionId: string) {
     ? (await admin.from('assets').select('path,kind,status,brand_id').eq('id', version.audio_asset_id).maybeSingle()).data
     : null;
   if (audio && (audio.kind !== 'audio' || audio.status !== 'validée' || audio.brand_id !== video.brand_id)) throw new HttpError(422, 'La piste audio sélectionnée n’est pas validée pour cette marque.');
+  const overlayLogo = shouldOverlayLogo(version.brief_json);
+  if (overlayLogo) {
+    try { await access(logoFile, constants.R_OK); }
+    catch { throw new HttpError(503, 'Le logo RIMCO est indisponible sur ce déploiement.'); }
+  }
 
   const [rawBytes, audioBytes] = await Promise.all([
     downloadAsset(admin, 'videos', version.raw_path, MAX_VIDEO_BYTES, 'La vidéo brute'),
@@ -46,7 +53,7 @@ export async function beginPostproduction(versionId: string) {
   const outputFile = join(directory, 'final.mp4');
   try {
     await Promise.all([writeFile(rawFile, rawBytes), ...(audioBytes && audioFile ? [writeFile(audioFile, audioBytes)] : [])]);
-    await runFfmpeg(ffmpegPath, makeFfmpegArgs({ rawFile, audioFile, outputFile, durationSeconds }));
+    await runFfmpeg(ffmpegPath, makeFinalVideoArgs({ rawFile, audioFile, logoFile, outputFile, durationSeconds, overlayLogo }));
     const outputStat = await stat(outputFile);
     if (outputStat.size > MAX_VIDEO_BYTES) throw new HttpError(502, 'Le MP4 final dépasse la taille autorisée.');
     const output = await readFile(outputFile);
@@ -93,21 +100,11 @@ export async function retryPostproduction(versionId: string, admin: AdminClient)
   return beginPostproduction(versionId);
 }
 
-function makeFfmpegArgs(input: { rawFile: string; audioFile: string | null; outputFile: string; durationSeconds: number }) {
-  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', input.rawFile];
-  if (input.audioFile) args.push('-stream_loop', '-1', '-i', input.audioFile);
-  args.push('-map', '0:v:0', '-c:v', 'copy');
-  if (input.audioFile) args.push('-map', '1:a:0', '-c:a', 'aac', '-b:a', '128k');
-  else args.push('-an');
-  args.push('-t', String(input.durationSeconds), '-movflags', '+faststart', input.outputFile);
-  return args;
-}
-
 /** Join the two separately generated, stored clips into the user's final montage. */
 export async function assembleShotMontage(versionId: string) {
   const admin = createStorageAdminClient();
   const { data: version, error: versionError } = await admin.from('video_versions')
-    .select('id,video_id,final_path')
+    .select('id,video_id,final_path,brief_json')
     .eq('id', versionId).single();
   if (versionError || !version) throw new HttpError(404, 'La version à assembler est introuvable.');
   if (version.final_path) return { finalPath: version.final_path as string };
@@ -117,6 +114,11 @@ export async function assembleShotMontage(versionId: string) {
     .eq('version_id', versionId).order('shot_number');
   if (shotsError || !shots || shots.length !== 2 || shots.some((shot) => shot.status !== 'ready' || !shot.raw_path)) {
     throw new HttpError(409, 'Les deux plans doivent être prêts avant leur assemblage.');
+  }
+  const overlayLogo = shouldOverlayLogo(version.brief_json);
+  if (overlayLogo) {
+    try { await access(logoFile, constants.R_OK); }
+    catch { throw new HttpError(503, 'Le logo RIMCO est indisponible sur ce déploiement.'); }
   }
   try { await access(ffmpegPath, constants.X_OK); }
   catch { throw new HttpError(503, 'FFmpeg n’est pas disponible sur ce déploiement.'); }
@@ -128,13 +130,7 @@ export async function assembleShotMontage(versionId: string) {
   const outputFile = join(directory, 'montage.mp4');
   try {
     await Promise.all(clipFiles.map((path, index) => writeFile(path, clipBytes[index])));
-    const args = [
-      '-hide_banner', '-loglevel', 'error', '-y',
-      '-i', clipFiles[0], '-i', clipFiles[1],
-      '-filter_complex', '[0:v:0][1:v:0]concat=n=2:v=1:a=0[outv]',
-      '-map', '[outv]', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
-      '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-t', '6', outputFile,
-    ];
+    const args = makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6 });
     await runFfmpeg(ffmpegPath, args);
     const outputStat = await stat(outputFile);
     if (outputStat.size > MAX_VIDEO_BYTES) throw new HttpError(502, 'Le montage dépasse la taille autorisée.');
