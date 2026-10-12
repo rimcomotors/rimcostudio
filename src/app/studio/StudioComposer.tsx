@@ -28,6 +28,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [assetId, setAssetId] = useState('');
   const [description, setDescription] = useState('');
   const [title, setTitle] = useState('');
+  const [overlayLogo, setOverlayLogo] = useState(true);
   const [storyboard, setStoryboard] = useState<ShotDraft[]>(defaultShotPlan);
   const [character, setCharacter] = useState('');
   const [lighting, setLighting] = useState(lightOptions[0]);
@@ -102,7 +103,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          description, title, assetId, character, lighting, mood, format, tier, durationS,
+          description, title, assetId, character, lighting, mood, format, tier, durationS, overlayLogo,
           storyboard,
           ...(mode === 'live' && routedModel ? { modelId: routedModel.id } : {}),
         }),
@@ -140,6 +141,10 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         <section className="space-y-4 border-t border-[#eeeae4] pt-5">
           <label className="grid gap-2 text-xs font-semibold">Titre de la vidéo<input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} placeholder="Ex. Starlight EV · lancement Abidjan" className="rounded-md border border-[#e9e7e2] bg-white px-3 py-3 text-sm font-normal outline-none focus:border-[#c51e1c]" /><span className="font-normal text-[#88847d]">Ce titre apparaîtra dans la Bibliothèque et le suivi de facturation.</span></label>
           <ShotPlanner value={storyboard} onChange={setStoryboard} />
+          <label className="flex cursor-pointer items-start gap-3 rounded-md border border-[#e9e7e2] bg-[#fcfcfb] p-3 text-xs">
+            <input type="checkbox" checked={overlayLogo} onChange={(event) => setOverlayLogo(event.target.checked)} className="mt-0.5 size-4 accent-[#c51e1c]" />
+            <span><b className="block">Ajouter le logo RIMCO</b><span className="mt-1 block font-normal text-[#88847d]">Incrusté en haut à gauche après la génération, sans appel IA ni tokens supplémentaires.</span></span>
+          </label>
           <label className="grid gap-2 text-xs font-semibold">Intention générale <span className="font-normal text-[#88847d]">Optionnelle · donne le ton aux deux plans</span>
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} rows={2} placeholder="Ex. Un film élégant qui évoque la liberté et le confort." className="w-full resize-y rounded-md border border-[#e9e7e2] bg-[#fcfcfb] p-3 text-sm font-normal leading-6 outline-none focus:border-[#c51e1c]" />
           </label>
