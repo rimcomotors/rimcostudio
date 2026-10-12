@@ -9,10 +9,10 @@ type Asset = { id: string; make?: string; model?: string; color?: string };
 type Ratings = { fidelity: number; realism: number; brandFit: number };
 type Result = { modelId: string; modelName: string; versionId?: string; status: string; error?: string; videoUrl?: string; ratings?: Ratings; comment?: string; elapsedSeconds?: number; costUsd?: number; costEur?: number; costRealFcfa?: number; priceFcfa?: number; costStatus?: string };
 type Comparison = { id: string; created_at: string; brief_json: { status?: string; notes?: string; brief?: { description?: string; format?: string }; results?: Result[] } };
-type Props = { mode: 'mock' | 'live'; usdToEurRate: number; budgetCapEur: number; llmMaxCostUsd: number };
+type Props = { mode: 'mock' | 'live'; usdToEurRate: number; llmMaxCostUsd: number };
 const formats = ['16:9', '9:16', '1:1'] as const;
 
-export function ComparisonWorkspace({ mode, usdToEurRate, budgetCapEur, llmMaxCostUsd }: Props) {
+export function ComparisonWorkspace({ mode, usdToEurRate, llmMaxCostUsd }: Props) {
   const [models, setModels] = useState<Model[]>([]);
   const [assets, setAssets] = useState<Asset[]>([]);
   const [comparisons, setComparisons] = useState<Comparison[]>([]);
@@ -25,8 +25,6 @@ export function ComparisonWorkspace({ mode, usdToEurRate, budgetCapEur, llmMaxCo
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
-  const [spentEur, setSpentEur] = useState(0);
-  const [budgetLoaded, setBudgetLoaded] = useState(mode !== 'live');
 
   async function loadComparisons() {
     const response = await fetch('/api/comparisons');
@@ -41,12 +39,10 @@ export function ComparisonWorkspace({ mode, usdToEurRate, budgetCapEur, llmMaxCo
       fetch('/api/admin/models').then(async (response) => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? 'Chargement des modèles impossible.'); return data.models ?? []; }),
       fetch('/api/assets?kind=vehicle&status=valid%C3%A9e').then(async (response) => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? 'Chargement des véhicules impossible.'); return data.assets ?? []; }),
       fetch('/api/comparisons').then(async (response) => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? 'Chargement des comparaisons impossible.'); return data.comparisons ?? []; }),
-      ...(mode === 'live' ? [fetch('/api/admin/costs').then(async (response) => { const data = await response.json(); if (!response.ok) throw new Error(data.error ?? 'Chargement du budget impossible.'); return data; })] : []),
     ]).then((loaded) => {
       if (!current) return;
-      const [modelRows, assetRows, comparisonRows, budget] = loaded as [Model[], Asset[], Comparison[], { spentEur?: number }?];
+      const [modelRows, assetRows, comparisonRows] = loaded as [Model[], Asset[], Comparison[]];
       setModels(modelRows); setAssets(assetRows); setComparisons(comparisonRows);
-      if (budget) { setSpentEur(Number(budget.spentEur ?? 0)); setBudgetLoaded(true); }
       if (assetRows.length) setAssetId(assetRows[0].id);
     }).catch((caught) => { if (current) setError(caught instanceof Error ? caught.message : 'Une erreur est survenue.'); });
     return () => { current = false; };
@@ -67,7 +63,6 @@ export function ComparisonWorkspace({ mode, usdToEurRate, budgetCapEur, llmMaxCo
       || (model.adapterFamily === 'veo' && model.falEndpointId === 'fal-ai/veo3.1/fast/image-to-video' && model.allowedDurations.includes(6)))), [models, format]);
   const selectedModels = compatibleModels.filter((model) => selected.includes(model.id));
   const estimatedEur = selectedModels.reduce((sum, model) => sum + (model.adapterFamily === 'veo' ? 6 : 5) * model.priceUsdPerSecond * usdToEurRate, 0) + (selectedModels.length ? 2 * llmMaxCostUsd * usdToEurRate : 0);
-  const budgetAvailable = budgetCapEur - spentEur;
 
   function toggle(id: string) {
     setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : current.length < 3 ? [...current, id] : current);
@@ -147,9 +142,9 @@ export function ComparisonWorkspace({ mode, usdToEurRate, budgetCapEur, llmMaxCo
         {compatibleModels.length < 2 && <p className="mt-3 text-xs leading-5 text-[#716d66]">Activez un second adaptateur compatible dans l’espace Admin. Wan 3.0 Test est disponible pour les ratios 16:9, 9:16 et 1:1. Veo Premium génère une source de 6 s, ensuite coupée à 5 s.</p>}
       </fieldset>
       <label className="grid gap-2 text-sm font-semibold">Notes de comparaison<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} rows={2} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] p-3 text-sm font-normal" /></label>
-      {mode === 'live' && <div className="max-w-3xl border-y border-[#e4e1db] py-3 text-xs leading-5 text-[#716d66]"><p>Coût maximal estimé pour cette comparaison, brief LLM inclus : <strong className="text-[#253b4e]">{estimatedEur.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})} EUR</strong>.</p><p>Budget déjà réservé ou consommé : {spentEur.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})} EUR sur {budgetCapEur.toLocaleString('fr-FR')} EUR. Disponible : {Math.max(0,budgetAvailable).toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})} EUR.</p>{estimatedEur > budgetAvailable && <p role="alert" className="mt-1 font-semibold text-[#831810]">Le budget disponible est insuffisant pour tous les modèles sélectionnés.</p>}</div>}
+      {mode === 'live' && <p className="max-w-3xl border-y border-[#e4e1db] py-3 text-xs leading-5 text-[#716d66]">Coût estimé de cette comparaison, brief LLM inclus : <strong className="text-[#253b4e]">{estimatedEur.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})} EUR</strong>. Le coût réel sera suivi après génération; le plafond de dépense est géré par fal.ai.</p>}
       {error && <p role="alert" className="text-sm text-[#831810]">{error}</p>}{notice && <p role="status" className="text-sm text-[#35556c]">{notice}</p>}
-      <button disabled={busy || selected.length < 2 || !assetId || !description.trim() || mode === 'live' && (!budgetLoaded || estimatedEur > budgetAvailable)} className="min-h-11 rounded-md bg-[#c51e1c] px-5 py-3 text-sm font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation des générations…' : mode === 'live' ? 'Lancer la comparaison' : 'Simuler la comparaison'}</button>
+      <button disabled={busy || selected.length < 2 || !assetId || !description.trim()} className="min-h-11 rounded-md bg-[#c51e1c] px-5 py-3 text-sm font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation des générations…' : mode === 'live' ? 'Lancer la comparaison' : 'Simuler la comparaison'}</button>
     </form>
 
     <section className="max-w-5xl"><div className="mb-3 flex flex-wrap items-end justify-between gap-3 border-b border-[#e4e1db] pb-3"><h2 className="text-base font-semibold">Comparaisons récentes</h2><div className="flex items-center gap-4"><button type="button" onClick={exportCsv} disabled={!comparisons.length} className="rounded-md border border-[#d2cec6] px-3 py-2 text-xs font-semibold hover:bg-[#f4f2ee] disabled:cursor-not-allowed disabled:opacity-50">Exporter CSV</button><Link href="/bibliotheque" className="text-xs font-semibold text-[#831810] underline underline-offset-4">Ouvrir la bibliothèque</Link></div></div>
