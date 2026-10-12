@@ -26,7 +26,7 @@ RIMCO Studio : application web où un utilisateur décrit une vidéo en langage 
 ## Variables d'environnement
 Toutes lues et validées par Zod dans src/env.ts, avec un message clair en français si une variable requise manque.
 - Supabase (injectées par l'intégration Vercel) : accepte les deux conventions de nommage : NEXT_PUBLIC_SUPABASE_URL ; NEXT_PUBLIC_SUPABASE_ANON_KEY ou NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ; SUPABASE_SERVICE_ROLE_KEY ou SUPABASE_SECRET_KEY.
-- À ajouter dans Vercel : PROVIDERS_MODE, FAL_KEY, LLM_MODEL, FAL_WEBHOOK_SECRET, CRON_SECRET, BUDGET_CAP_EUR=20, USD_TO_EUR_RATE, EUR_TO_FCFA=655.957 (et ANTHROPIC_API_KEY seulement si le repli Anthropic a été nécessaire).
+- À ajouter dans Vercel : PROVIDERS_MODE, FAL_KEY, LLM_MODEL, FAL_WEBHOOK_SECRET, CRON_SECRET, USD_TO_EUR_RATE, EUR_TO_FCFA=655.957 (et ANTHROPIC_API_KEY seulement si le repli Anthropic a été nécessaire). Le plafond de dépenses est défini dans fal.ai.
 - URL publique : APP_URL si définie, sinon https://${VERCEL_PROJECT_PRODUCTION_URL}, sinon http://localhost:3000.
 - Clés secrètes (FAL_KEY, ANTHROPIC_API_KEY éventuelle, clé service role ou secret Supabase, FAL_WEBHOOK_SECRET, CRON_SECRET) : jamais importées dans un composant client, jamais préfixées NEXT_PUBLIC_.
 - .env.example à jour, valeurs vides ou fictives, avec un commentaire indiquant d'où vient chaque variable.
@@ -36,7 +36,7 @@ Logique dans src/core/pricing/ (fonctions pures, testées).
 - Coût réel : cost_usd = seconds × price_usd_per_second ; cost_eur = cost_usd × USD_TO_EUR_RATE ; cost_real_fcfa = cost_eur × EUR_TO_FCFA.
 - Prix facturé : grille fixe, indépendante du modèle : price_fcfa = seconds × grid_fcfa_per_second[niveau], Standard = 460, Premium = 700 FCFA/s (2 300 et 3 500 FCFA pour 5 s). Niveau test facturé au tarif Premium. Tarifs dans pricing_settings (une ligne par marque), modifiables par l'admin.
 - Affichage partout en FCFA, format « 1 234 FCFA » (espace insécable, sans décimales). Collaborateurs et valideurs ne voient que le prix facturé. L'admin voit aussi coût réel (FCFA et EUR) et marge (valeur et %).
-- Plafond calculé sur le coût RÉEL en EUR. Avant chaque envoi, réserver le coût estimé dans usage_ledger (statut reserved) via une fonction SQL transactionnelle qui refuse si réservé + consommé + estimation > BUDGET_CAP_EUR. À la fin : charged ; en cas d'échec non facturé : released. Alerte visible à 80 %.
+- Suivi calculé sur le coût RÉEL en EUR. Avant chaque envoi, inscrire le coût estimé dans usage_ledger (statut reserved); cela ne doit jamais bloquer une génération sur la base d’un plafond applicatif. À la fin : charged ; en cas d'échec non facturé : released. Le plafond fournisseur est contrôlé par fal.ai.
 - Chaque ligne du journal fige le tarif FCFA/s appliqué : modifier la grille ne change jamais l'historique.
 
 ## Identité visuelle
