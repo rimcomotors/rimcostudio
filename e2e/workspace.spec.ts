@@ -20,9 +20,16 @@ test('collaborateur génère, visionne et télécharge la vidéo simulée',async
  test.setTimeout(90_000);
  await signIn(page, creatorEmail, testUserPassword);
  await page.goto('/studio');
+ const logoToggle = page.getByRole('checkbox', { name: /Ajouter le logo RIMCO/ });
+ await expect(logoToggle).toBeChecked();
+ await logoToggle.uncheck();
+ await expect(logoToggle).not.toBeChecked();
+ await logoToggle.check();
  await page.getByLabel('Intention générale').fill('Un Haval H6 bleu roule doucement dans le Plateau à Abidjan.');
  await expect(page.getByText('Haval H6')).toBeVisible();
+ const createRequest = page.waitForRequest((request) => request.url().endsWith('/api/versions') && request.method() === 'POST');
  await page.getByRole('button',{name:/Générer ma vidéo/}).click();
+ expect((await createRequest).postDataJSON().overlayLogo).toBe(true);
  await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({timeout:65_000});
  await page.getByRole('link',{name:'Voir ma vidéo'}).click();
  await page.goto('/bibliotheque');
