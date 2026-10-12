@@ -10,7 +10,7 @@
 | 3. Génération | ◷ Prête à tester en live | Mode live activé dans Preview. Le parcours réel génération → stockage → post-production n’a pas encore été exécuté dans l’application. |
 | 4. Validation et édition | Hors périmètre V1 | L’écran de validation est redirigé vers la bibliothèque. Il n’y a ni approbation ni édition par phrase dans le flux V1. |
 | 5. Bibliothèque | ☑ Code livré | Les vidéos prêtes sont lisibles et téléchargeables par leur créateur. Le parcours réel reste à vérifier après activation du compte et ajout des médias. |
-| 6. Budget et coûts | ☑ Code livré | Réservation transactionnelle, suivi et règles de prix présentes. Le budget fal externe a déjà consommé 0,952866 USD sur 2 USD; un seul essai d’application reste autorisé (maximum 1,047134 USD). |
+| 6. Budget et coûts | ☑ Code livré | Réservation transactionnelle, suivi et règles de prix présentes. Le dernier état documenté de l’ancien plafond était 0,952866 USD consommé sur 2 USD; l’utilisateur indique maintenant avoir défini 10 USD dans fal.ai. Le solde réel actuel n’a pas été relu. |
 | 7. Vérifications | ☑ CI, ◷ parcours live | `checks` (lint, types, tests, build) et E2E passent dans GitHub Actions. Preview et Production sont READY. La génération réelle depuis l’application est en attente du compte et des médias. |
 
 ## Services
@@ -31,6 +31,13 @@
 
 1. Après le délai de limitation Auth, envoyer un nouveau lien de récupération et vérifier qu’il ouvre directement `/connexion`; définir le mot de passe depuis cet e-mail récent (valable 60 minutes).
 2. Se connecter au Preview et charger un logo RIMCO et une photo de véhicule autorisés, puis valider ces médias.
-3. Lancer une seule génération Standard et vérifier le traitement, la lecture et le téléchargement, sans dépasser le solde fal restant autorisé de 1,047134 USD.
+3. Pour le nouveau prototype, lancer un montage de deux plans de 3 secondes et vérifier le traitement, la lecture et le téléchargement; vérifier le solde réel fal.ai avant les essais.
 4. Révoquer/remplacer les clés FAL et Supabase de service exposées, puis actualiser les secrets Vercel.
 5. Vérifier les conditions du plan Vercel avant tout usage client commercial.
+
+## Prototype multi-plans (2026-10-12)
+
+- Le Studio permet maintenant de préparer deux plans courts de 3 s et de demander leur assemblage en un clip d’environ 6 s en mode live Kling O3 Pro.
+- Un plafond app de 10 USD par défaut est croisé avec le plafond métier EUR avant réservation. Le coût unitaire catalogue actuel donne une estimation de 0,672 USD par montage complet (deux générations de 3 s chacune); cette estimation dépend du tarif Fal configuré et ne lance aucun appel fournisseur par elle-même.
+- Avant un essai connecté à Supabase, coller `supabase/setup.sql` actualisé dans l’éditeur SQL afin d’ajouter la table `video_shots`. Ne pas utiliser le bouton de génération tant que l’authentification, la photo véhicule validée et le déploiement Preview live ne sont pas prêts.
+- Aucun test fournisseur payant ni déploiement n’a été lancé dans le cadre de ce changement. Contrôles locaux réussis : TypeScript, lint (un avertissement non bloquant dans `src/components/shell.tsx`), 37 tests unitaires et compilation Next.js.

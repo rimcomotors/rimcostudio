@@ -43,3 +43,10 @@
 - L’estimation avant génération utilise le tarif de référence du modèle, la durée source facturée par Fal, les taux de conversion et la majoration de 30 %. Elle est indicative, affichée uniquement en FCFA, et recalculée selon le modèle et la durée. Les ajustements de tarif du fournisseur peuvent faire varier la facture réelle.
 - Le prompt reçoit la durée et un niveau de complexité (simple, équilibré, riche). Il développe une progression visuelle adaptée dans un plan continu, sans modifier l’identité du véhicule.
 - Références Fal vérifiées le 8 octobre 2026 : [Kling O3 Pro accepte 3 à 15 secondes](https://fal.ai/models/fal-ai/kling-video/o3/pro/image-to-video/api); [Seedance 2.5 accepte 4 à 30 secondes et facture selon la surface de sortie et la durée](https://fal.ai/models/bytedance/seedance-2.5/image-to-video/api). Les clips au-delà de 15 secondes passent par Seedance.
+
+## Prototype de montage multi-plans (2026-10-12)
+
+- Pour l’essai interne avant la présentation client, le Studio propose deux plans Kling O3 Pro de 3 secondes générés séparément puis assemblés en un MP4 d’environ 6 secondes. La photo véhicule commune sert de référence aux deux plans; l’utilisateur précise scène, lieu, action et mouvement caméra pour chacun.
+- Estimation fournisseur actuelle : 6 × 0,112 USD = 0,672 USD par montage complet, sans appel LLM. Le serveur réserve l’estimation et applique le plafond effectif le plus bas entre `BUDGET_CAP_EUR` et `FAL_BUDGET_CAP_USD` (10 USD par défaut). Le tarif Fal est susceptible de changer; revalider avant les essais.
+- Cette itération ne comprend ni validation/approbation, ni logo, ni habillage, ni piste audio. Le montage vidéo utilise FFmpeg côté serveur. La migration `0010_video_shots.sql` crée le suivi des deux rendus; pour Supabase, exécuter le contenu actualisé de `supabase/setup.sql` depuis l’éditeur SQL avant le premier essai live.
+- La simulation locale n’appelle pas Fal et ne produit pas le vrai montage. Aucun travail n’a été déployé et aucun nouvel appel payant n’a été lancé par Codex.

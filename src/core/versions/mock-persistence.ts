@@ -4,7 +4,7 @@ import { briefToPrompt, buildBrief } from '@/core/brief';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { supabaseServiceKey } from '@/env';
-import { env } from '@/env';
+import { env, effectiveBudgetCapEur } from '@/env';
 import { mockStatusAt } from './mock-status';
 import type { CreateVersionInput } from './live';
 import { calculateClientPriceFcfa } from '@/core/pricing';
@@ -44,14 +44,14 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
     p_user_id: actor.id, p_version_id: version.id, p_model_id: model.id, p_seconds: 5,
     // Simulation never reaches fal.ai, so it must not reserve provider budget.
     p_price_usd_second: 0, p_usd_to_eur: env.USD_TO_EUR_RATE,
-    p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa, p_cap_eur: env.BUDGET_CAP_EUR,
+    p_eur_to_fcfa: env.EUR_TO_FCFA, p_price_fcfa: priceFcfa, p_cap_eur: effectiveBudgetCapEur,
     p_department: actor.department, p_applied_fcfa_second: fcfaPerSecond,
   });
   if (ledgerError || !ledgerId) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(ledgerError?.message.includes('Plafond') ? 409 : 503, ledgerError?.message.includes('Plafond') ? 'Le plafond de coût simulé est atteint. Aucune génération n’a été lancée.' : 'Impossible de réserver le budget simulé. La génération a été annulée.');
   }
-  const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'charged', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: env.BUDGET_CAP_EUR });
+  const { error: settleError } = await admin.rpc('settle_budget', { p_entry_id: ledgerId, p_outcome: 'charged', p_actual_cost_usd: 0, p_usd_to_eur: env.USD_TO_EUR_RATE, p_eur_to_fcfa: env.EUR_TO_FCFA, p_cap_eur: effectiveBudgetCapEur });
   if (settleError) throw new HttpError(503, 'La simulation est créée, mais son coût doit être réconcilié dans le journal.');
   return { id: version.id, status: 'queued' as const, prompt, estimatedPriceFcfa: priceFcfa, version: version.number };
 }

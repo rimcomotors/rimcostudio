@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { errorResponse, HttpError, requireRole } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { env } from '@/env';
+import { env, effectiveBudgetCapEur } from '@/env';
 import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
 import { listComparisons, saveComparison } from '@/core/comparisons/store';
@@ -93,7 +93,7 @@ export async function POST(request: Request) {
       const committedEur = (ledger ?? []).reduce((sum, row) => sum + Number(row.cost_eur), 0);
       const videoEstimateEur = models.reduce((sum, model) => sum + sourceDuration(model.adapter_family) * Number(model.price_usd_per_second) * env.USD_TO_EUR_RATE, 0);
       const briefEstimateEur = 2 * (env.LLM_MAX_COST_USD ?? 0) * env.USD_TO_EUR_RATE;
-      if (committedEur + videoEstimateEur + briefEstimateEur > env.BUDGET_CAP_EUR) throw new HttpError(409, 'Le budget disponible ne couvre pas le coût estimé de tous les modèles et du brief. Aucune génération n’a été lancée.');
+      if (committedEur + videoEstimateEur + briefEstimateEur > effectiveBudgetCapEur) throw new HttpError(409, 'Le budget disponible ne couvre pas le coût estimé de tous les modèles et du brief. Aucune génération n’a été lancée.');
     }
     const { data: comparison, error } = await admin.from('comparisons').insert({ user_id: actor.id, brief_json: { ...input, status: env.PROVIDERS_MODE === 'live' ? 'running' : 'draft', results: [] } }).select('id,user_id,brief_json,created_at').single();
     if (error || !comparison) throw new HttpError(503, 'Impossible d’enregistrer cette comparaison.');
@@ -112,7 +112,7 @@ export async function POST(request: Request) {
       try {
         const tier = model.tier === 'test' ? 'test' : model.tier === 'standard' ? 'standard' : 'premium';
         const result = await createLiveVersion(actor, { ...commonRequest, tier }, { modelId: model.id, ...(shared ? { reuse: shared } : {}) });
-        shared ??= { brief: result.brief, prompt: result.prompt };
+        if ('brief' in result) shared ??= { brief: result.brief, prompt: result.prompt };
         results.push({ modelId: model.id, modelName: model.name, versionId: result.id, status: result.status });
       } catch (error) {
         results.push({ modelId: model.id, modelName: model.name, status: 'failed', error: error instanceof Error ? error.message : 'La génération de comparaison a échoué.' });

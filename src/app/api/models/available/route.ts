@@ -33,7 +33,10 @@ export async function GET() {
         : durationChoices.filter((duration) => model.allowed_durations.includes(duration) && (model.adapter_family !== 'kling' && model.adapter_family !== 'seedance' || duration > 5));
       if (!durations.length) return [];
       const sourceDuration = model.adapter_family === 'veo' ? 6 : null;
-      const estimatedPricesFcfa = Object.fromEntries(durations.map((duration) => [duration, calculateClientPriceFcfa((sourceDuration ?? duration) * Number(model.price_usd_per_second), env.USD_TO_EUR_RATE, env.EUR_TO_FCFA)]));
+      const estimatedPricesFcfa = Object.fromEntries([
+        ...durations.map((duration) => [duration, calculateClientPriceFcfa((sourceDuration ?? duration) * Number(model.price_usd_per_second), env.USD_TO_EUR_RATE, env.EUR_TO_FCFA)] as const),
+        ...(model.adapter_family === 'kling' ? [[6, calculateClientPriceFcfa(6 * Number(model.price_usd_per_second), env.USD_TO_EUR_RATE, env.EUR_TO_FCFA)] as const] : []),
+      ]);
       return [{ id: model.id, name: model.name, tier: model.tier, adapterFamily: model.adapter_family, formats: model.allowed_formats, durations, estimatedPricesFcfa, isDefault: model.is_default }];
     });
     return NextResponse.json({ models });

@@ -11,6 +11,13 @@ describe('Kling fal adapter', () => {
     expect(response.requestId).toBe('request-123');
     expect(mockSubmit).toHaveBeenCalledWith(KLING_ENDPOINT, { input: { prompt: 'A vehicle commercial', image_url: 'https://assets.example/car.jpg', duration: '5', generate_audio: false } });
   });
+
+  it('supports a three-second source clip for the short two-shot prototype', async () => {
+    mockSubmit.mockResolvedValue({ request_id: 'short-shot-request' });
+    const { klingVideoProvider, KLING_ENDPOINT } = await import('./fal-kling');
+    await klingVideoProvider.submit({ prompt: 'Establish the vehicle', imageUrl: 'https://assets.example/car.jpg', durationS: 3, format: '16:9' });
+    expect(mockSubmit).toHaveBeenCalledWith(KLING_ENDPOINT, { input: expect.objectContaining({ duration: '3', generate_audio: false }) });
+  });
   it('maps queued and completed responses and returns the provider video URL', async () => {
     mockStatus.mockResolvedValue({ status: 'IN_QUEUE' });
     const { klingVideoProvider } = await import('./fal-kling');

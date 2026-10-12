@@ -7,13 +7,12 @@ import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 
 const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
-const MAX_LOGO_BYTES = 25 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
 type AdminClient = ReturnType<typeof createStorageAdminClient>;
 
-/** Compose the requested duration with an aspect-preserving RIMCO logo and optional audio. */
+/** Normalize a provider clip to MP4 and optionally mix a user-selected audio track. */
 export async function beginPostproduction(versionId: string) {
   const admin = createStorageAdminClient();
   const { data: version, error } = await admin.from('video_versions')
@@ -21,7 +20,7 @@ export async function beginPostproduction(versionId: string) {
     .eq('id', versionId).single();
   if (error || !version?.raw_path) throw new HttpError(409, 'La vidéo brute est indisponible pour la post-production.');
   const durationSeconds = Number(version.generation_seconds);
-  if (![5, 10, 15, 20, 30].includes(durationSeconds)) throw new HttpError(422, 'La durée enregistrée pour cette vidéo n’est pas prise en charge.');
+  if (![5, 6, 10, 15, 20, 30].includes(durationSeconds)) throw new HttpError(422, 'La durée enregistrée pour cette vidéo n’est pas prise en charge.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   if (!video?.brand_id || !video.user_id) throw new HttpError(409, 'La marque associée à cette vidéo est introuvable.');
   try {
@@ -30,29 +29,24 @@ export async function beginPostproduction(versionId: string) {
     throw new HttpError(503, 'FFmpeg n’est pas disponible sur ce déploiement.');
   }
 
-  const [{ data: logos }, { data: audio }] = await Promise.all([
-    admin.from('assets').select('path').eq('brand_id', video.brand_id).eq('kind', 'logo').eq('status', 'validée').order('created_at', { ascending: false }).limit(1),
-    version.audio_asset_id ? admin.from('assets').select('path,kind,status,brand_id').eq('id', version.audio_asset_id).maybeSingle() : Promise.resolve({ data: null }),
-  ]);
-  const logo = logos?.[0];
-  if (!logo) throw new HttpError(409, 'Aucun logo RIMCO validé n’est disponible. Ajoutez-le et validez-le dans la médiathèque.');
+  const audio = version.audio_asset_id
+    ? (await admin.from('assets').select('path,kind,status,brand_id').eq('id', version.audio_asset_id).maybeSingle()).data
+    : null;
   if (audio && (audio.kind !== 'audio' || audio.status !== 'validée' || audio.brand_id !== video.brand_id)) throw new HttpError(422, 'La piste audio sélectionnée n’est pas validée pour cette marque.');
 
-  const [rawBytes, logoBytes, audioBytes] = await Promise.all([
+  const [rawBytes, audioBytes] = await Promise.all([
     downloadAsset(admin, 'videos', version.raw_path, MAX_VIDEO_BYTES, 'La vidéo brute'),
-    downloadAsset(admin, 'brand', logo.path, MAX_LOGO_BYTES, 'Le logo RIMCO'),
     audio ? downloadAsset(admin, 'audio', audio.path, MAX_AUDIO_BYTES, 'La piste audio') : Promise.resolve(null),
   ]);
   validateMp4(rawBytes);
 
   const directory = await mkdtemp(join(tmpdir(), 'rimco-postprod-'));
   const rawFile = join(directory, 'raw.mp4');
-  const logoFile = join(directory, logo.path.toLowerCase().endsWith('.webp') ? 'logo.webp' : logo.path.toLowerCase().endsWith('.jpg') || logo.path.toLowerCase().endsWith('.jpeg') ? 'logo.jpg' : 'logo.png');
   const audioFile = audioBytes ? join(directory, audio?.path.toLowerCase().endsWith('.wav') ? 'sound.wav' : audio?.path.toLowerCase().endsWith('.m4a') ? 'sound.m4a' : 'sound.mp3') : null;
   const outputFile = join(directory, 'final.mp4');
   try {
-    await Promise.all([writeFile(rawFile, rawBytes), writeFile(logoFile, logoBytes), ...(audioBytes && audioFile ? [writeFile(audioFile, audioBytes)] : [])]);
-    await runFfmpeg(ffmpegPath, makeFfmpegArgs({ rawFile, logoFile, audioFile, outputFile, durationSeconds }));
+    await Promise.all([writeFile(rawFile, rawBytes), ...(audioBytes && audioFile ? [writeFile(audioFile, audioBytes)] : [])]);
+    await runFfmpeg(ffmpegPath, makeFfmpegArgs({ rawFile, audioFile, outputFile, durationSeconds }));
     const outputStat = await stat(outputFile);
     if (outputStat.size > MAX_VIDEO_BYTES) throw new HttpError(502, 'Le MP4 final dépasse la taille autorisée.');
     const output = await readFile(outputFile);
@@ -79,7 +73,7 @@ export async function beginPostproduction(versionId: string) {
       }
     }
 
-    const { error: versionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, overlay_variant: 'ffmpeg-static-rimco-corner', error_message: null, updated_at: new Date().toISOString() }).eq('id', versionId);
+    const { error: versionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, overlay_variant: null, error_message: null, updated_at: new Date().toISOString() }).eq('id', versionId);
     if (versionError) throw new HttpError(503, 'Le MP4 final est enregistré; son état doit être réconcilié.');
     const { error: readyError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
@@ -99,14 +93,64 @@ export async function retryPostproduction(versionId: string, admin: AdminClient)
   return beginPostproduction(versionId);
 }
 
-function makeFfmpegArgs(input: { rawFile: string; logoFile: string; audioFile: string | null; outputFile: string; durationSeconds: number }) {
-  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', input.rawFile, '-loop', '1', '-i', input.logoFile];
+function makeFfmpegArgs(input: { rawFile: string; audioFile: string | null; outputFile: string; durationSeconds: number }) {
+  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', input.rawFile];
   if (input.audioFile) args.push('-stream_loop', '-1', '-i', input.audioFile);
-  args.push('-filter_complex', '[1:v]scale=240:120:force_original_aspect_ratio=decrease:force_divisible_by=2[logo];[0:v][logo]overlay=x=W-w-32:y=H-h-32:format=auto,format=yuv420p[v]', '-map', '[v]');
-  if (input.audioFile) args.push('-map', '2:a:0', '-c:a', 'aac', '-b:a', '128k');
+  args.push('-map', '0:v:0', '-c:v', 'copy');
+  if (input.audioFile) args.push('-map', '1:a:0', '-c:a', 'aac', '-b:a', '128k');
   else args.push('-an');
-  args.push('-t', String(input.durationSeconds), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', input.outputFile);
+  args.push('-t', String(input.durationSeconds), '-movflags', '+faststart', input.outputFile);
   return args;
+}
+
+/** Join the two separately generated, stored clips into the user's final montage. */
+export async function assembleShotMontage(versionId: string) {
+  const admin = createStorageAdminClient();
+  const { data: version, error: versionError } = await admin.from('video_versions')
+    .select('id,video_id,final_path')
+    .eq('id', versionId).single();
+  if (versionError || !version) throw new HttpError(404, 'La version à assembler est introuvable.');
+  if (version.final_path) return { finalPath: version.final_path as string };
+
+  const { data: shots, error: shotsError } = await admin.from('video_shots')
+    .select('shot_number,status,raw_path')
+    .eq('version_id', versionId).order('shot_number');
+  if (shotsError || !shots || shots.length !== 2 || shots.some((shot) => shot.status !== 'ready' || !shot.raw_path)) {
+    throw new HttpError(409, 'Les deux plans doivent être prêts avant leur assemblage.');
+  }
+  try { await access(ffmpegPath, constants.X_OK); }
+  catch { throw new HttpError(503, 'FFmpeg n’est pas disponible sur ce déploiement.'); }
+
+  const clipBytes = await Promise.all(shots.map((shot, index) => downloadAsset(admin, 'videos', shot.raw_path, MAX_VIDEO_BYTES, `Le plan ${index + 1}`)));
+  clipBytes.forEach(validateMp4);
+  const directory = await mkdtemp(join(tmpdir(), 'rimco-montage-'));
+  const clipFiles = [join(directory, 'shot-1.mp4'), join(directory, 'shot-2.mp4')];
+  const outputFile = join(directory, 'montage.mp4');
+  try {
+    await Promise.all(clipFiles.map((path, index) => writeFile(path, clipBytes[index])));
+    const args = [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', clipFiles[0], '-i', clipFiles[1],
+      '-filter_complex', '[0:v:0][1:v:0]concat=n=2:v=1:a=0[outv]',
+      '-map', '[outv]', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+      '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-t', '6', outputFile,
+    ];
+    await runFfmpeg(ffmpegPath, args);
+    const outputStat = await stat(outputFile);
+    if (outputStat.size > MAX_VIDEO_BYTES) throw new HttpError(502, 'Le montage dépasse la taille autorisée.');
+    const output = await readFile(outputFile);
+    validateMp4(output);
+    const finalPath = `${version.video_id}/${versionId}/montage.mp4`;
+    const { error: uploadError } = await admin.storage.from('videos').upload(finalPath, output, { contentType: 'video/mp4', upsert: true });
+    if (uploadError) throw new HttpError(502, 'Impossible d’enregistrer le montage dans le stockage sécurisé.');
+    const { error: updateVersionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, raw_path: null, error_message: null, updated_at: new Date().toISOString() }).eq('id', versionId);
+    if (updateVersionError) throw new HttpError(503, 'Le montage est enregistré; son état doit être réconcilié.');
+    const { error: updateVideoError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
+    if (updateVideoError) throw new HttpError(503, 'Le montage est prêt; son état doit être réconcilié.');
+    return { finalPath };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 function runFfmpeg(executable: string, args: string[]) {
