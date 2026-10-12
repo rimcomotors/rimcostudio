@@ -37,10 +37,3 @@ export function formatFcfa(amount:number):string {
   const formatted=new Intl.NumberFormat('fr-FR',{maximumFractionDigits:0}).format(Math.round(amount));
   return `${formatted.replace(/[\u00a0\u202f ]/g,'\u00a0')} FCFA`;
 }
-
-export function calculateBudget(spentEur:number,capEur:number){
-  assertNonNegative(spentEur,'Le montant consommé');
-  assertPositive(capEur,'Le plafond');
-  const usagePercent=Math.min(100,Math.round((spentEur/capEur)*100));
-  return {spentEur,capEur,remainingEur:Math.max(0,capEur-spentEur),usagePercent,warning:spentEur/capEur>=.8};
-}
