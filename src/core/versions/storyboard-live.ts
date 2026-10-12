@@ -75,7 +75,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   });
   if (reserveError || !ledgerId) {
     await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
-    throw new HttpError(reserveError?.message.includes('Plafond') ? 409 : 503, reserveError?.message.includes('Plafond') ? 'Le budget fal réservé est atteint. Aucun plan n’a été lancé.' : 'Impossible de réserver le budget du montage.');
+    throw new HttpError(reserveError?.message.includes('Plafond') ? 409 : 503, reserveError?.message.includes('Plafond') ? 'Le budget métier disponible est atteint. Aucun plan n’a été lancé.' : 'Impossible de réserver le budget du montage.');
   }
 
   const shotRows = input.storyboard.map((shot, index) => ({
