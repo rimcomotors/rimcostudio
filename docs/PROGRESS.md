@@ -10,7 +10,7 @@
 | 3. Génération | ◷ Prête à tester en live | Mode live activé dans Preview. Le parcours réel génération → stockage → post-production n’a pas encore été exécuté dans l’application. |
 | 4. Validation et édition | Hors périmètre V1 | L’écran de validation est redirigé vers la bibliothèque. Il n’y a ni approbation ni édition par phrase dans le flux V1. |
 | 5. Bibliothèque | ☑ Code livré | Les vidéos prêtes sont lisibles et téléchargeables par leur créateur. Le parcours réel reste à vérifier après activation du compte et ajout des médias. |
-| 6. Budget et coûts | ☑ Code livré | Réservation transactionnelle, suivi et règles de prix présentes. Le dernier état documenté de l’ancien plafond était 0,952866 USD consommé sur 2 USD; l’utilisateur indique maintenant avoir défini 10 USD dans fal.ai. Le solde réel actuel n’a pas été relu. |
+| 6. Budget et coûts | ☑ Code livré | Suivi transactionnel des coûts, montants facturés et délais; Fal gère le plafond de dépenses. Le solde du budget fal n’a pas été relu. |
 | 7. Vérifications | ☑ CI, ◷ parcours live | `checks` (lint, types, tests, build) et E2E passent dans GitHub Actions. Preview et Production sont READY. La génération réelle depuis l’application est en attente du compte et des médias. |
 
 ## Services
@@ -25,7 +25,7 @@
 - CI GitHub, run `37780443278` : jobs `checks` et `e2e` réussis.
 - Déploiements Vercel Preview et Production : état `READY`.
 - Génération réelle dans l’application : pas encore vérifiée; elle nécessite une récupération Auth valide, puis une photo véhicule et un logo RIMCO chargés et validés.
-- Aucun nouvel appel payant fal n’a été lancé dans l’application. Un seul essai reste dans le plafond autorisé.
+- La tentative depuis le Studio n’a pas atteint Fal : la version n’a pas pu être créée dans Supabase. Aucun rendu fournisseur payant n’a été lancé.
 
 ## Étapes pour terminer le test réel
 
@@ -38,6 +38,6 @@
 ## Prototype multi-plans (2026-10-12)
 
 - Le Studio permet maintenant de préparer deux plans courts de 3 s et de demander leur assemblage en un clip d’environ 6 s en mode live Kling O3 Pro.
-- Un plafond app de 10 USD par défaut est croisé avec le plafond métier EUR avant réservation. Le coût unitaire catalogue actuel donne une estimation de 0,672 USD par montage complet (deux générations de 3 s chacune); cette estimation dépend du tarif Fal configuré et ne lance aucun appel fournisseur par elle-même.
+- Le plafond de dépense est configuré directement dans fal.ai; l’application suit les coûts mais ne bloque pas les générations selon un plafond interne. Le coût unitaire catalogue actuel donne une estimation de 0,672 USD par montage complet (deux générations de 3 s chacune); cette estimation dépend du tarif Fal configuré et ne lance aucun appel fournisseur par elle-même.
 - Avant un essai connecté à Supabase, coller `supabase/setup.sql` actualisé dans l’éditeur SQL afin d’ajouter la table `video_shots`. Ne pas utiliser le bouton de génération tant que l’authentification, la photo véhicule validée et le déploiement Preview live ne sont pas prêts.
 - Aucun test fournisseur payant ni déploiement n’a été lancé dans le cadre de ce changement. Contrôles locaux réussis : TypeScript, lint (un avertissement non bloquant dans `src/components/shell.tsx`), 37 tests unitaires et compilation Next.js.
