@@ -14,7 +14,7 @@ async function signIn(page: import('@playwright/test').Page, email: string, pass
   await expect(page).toHaveURL('/', { timeout: 10_000 });
 }
 
-test('connexion administrateur puis accès au studio de création',async({page})=>{await signIn(page,adminEmail,adminPassword);await expect(page).toHaveURL('/');await expect(page.getByRole('heading',{name:'De la demande au MP4, en quelques minutes'})).toBeVisible();await page.getByRole('link',{name:'Créer un montage test'}).click();await expect(page.getByRole('heading',{name:'Créer un montage test'})).toBeVisible();await expect(page.getByLabel('Intention générale')).toBeVisible();await expect(page.getByRole('heading',{name:'Véhicule de référence'})).toBeVisible();await expect(page.getByRole('heading',{name:'Plans de la vidéo'})).toBeVisible()});
+test('connexion administrateur puis accès au studio de création',async({page})=>{await signIn(page,adminEmail,adminPassword);await expect(page).toHaveURL('/');await expect(page.getByRole('heading',{name:'De la demande au MP4, en quelques minutes'})).toBeVisible();await page.getByRole('link',{name:'Créer une vidéo'}).click();await expect(page.getByRole('heading',{name:'Créer un montage test'})).toBeVisible();await expect(page.getByLabel('Intention générale')).toBeVisible();await expect(page.getByRole('heading',{name:'Véhicule de référence'})).toBeVisible();await expect(page.getByRole('heading',{name:'Plans de la vidéo'})).toBeVisible()});
 
 test('collaborateur génère, visionne et télécharge la vidéo simulée',async({page})=>{
  test.setTimeout(90_000);
