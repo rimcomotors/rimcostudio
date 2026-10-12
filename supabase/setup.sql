@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 11109)
+Total output lines: 567
+
 -- RIMCO Studio initial schema. Safe to apply repeatedly on a clean or existing V1 database.
 create extension if not exists pgcrypto;
 
@@ -240,52 +243,7 @@ begin
   return new;
 end $$;
 drop trigger if exists guard_validation_update_trigger on public.validations;
-create trigger guard_validation_update_trigger before update on public.validations for each row execute function public.guard_validation_update();
-drop policy if exists ledger_admin_read on public.usage_ledger;
-create policy ledger_admin_read on public.usage_ledger for select to authenticated using(public.is_admin());
-drop policy if exists comparisons_admin_all on public.comparisons;
-create policy comparisons_admin_all on public.comparisons for all to authenticated using(public.is_admin()) with check(public.is_admin());
-
--- Expose model choices without revealing provider unit costs to collaborators or validators.
-create or replace view public.model_catalog with (security_invoker=true) as
-  select id,name,tier,adapter_family,mode,allowed_durations,allowed_formats,is_active,is_default from public.ai_models;
-revoke all on public.ai_models from anon,authenticated;
-grant select on public.ai_models to authenticated;
-grant select on public.model_catalog to authenticated;
-
--- Storage objects are private. Uploads go into a first-level folder named with auth.uid().
-insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values
-  ('assets','assets',false,26214400,array['image/jpeg','image/png','image/webp']::text[]),
-  ('videos','videos',false,104857600,array['video/mp4']::text[]),
-  ('audio','audio',false,26214400,array['audio/mpeg','audio/wav','audio/mp4']::text[]),
-  ('brand','brand',false,26214400,array['image/jpeg','image/png','image/webp']::text[])
-on conflict(id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
-drop policy if exists rimco_storage_read on storage.objects;
-create policy rimco_storage_read on storage.objects for select to authenticated using(
-  public.is_admin() or
-  (bucket_id='brand' and (storage.foldername(name))[1]=auth.uid()::text) or
-  (bucket_id='brand' and exists(select 1 from public.assets a join public.profiles p on p.id=auth.uid() and p.brand_id=a.brand_id and p.is_active where a.path=name and a.kind='logo' and a.status='validée')) or
-  (bucket_id in ('assets','audio') and (storage.foldername(name))[1]=auth.uid()::text) or
-  (bucket_id='assets' and exists(select 1 from public.assets a where a.path=name and a.status='validée')) or
-  (bucket_id='audio' and exists(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
-  (bucket_id='videos' and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.user_id=auth.uid() and v.status='approved' and vv.final_path=name)) or
-  (bucket_id='videos' and exists(select 1 from public.profiles p join public.videos v on v.brand_id=p.brand_id and v.department=p.department and v.status='review' join public.video_versions vv on vv.video_id=v.id where p.id=auth.uid() and p.role='valideur' and p.is_active and vv.final_path=name))
-);
-drop policy if exists rimco_storage_upload on storage.objects;
-create policy rimco_storage_upload on storage.objects for insert to authenticated with check(bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text);
-drop policy if exists rimco_storage_update on storage.objects;
-create policy rimco_storage_update on storage.objects for update to authenticated using(bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text) with check(bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text);
-drop policy if exists rimco_storage_delete on storage.objects;
-create policy rimco_storage_delete on storage.objects for delete to authenticated using(public.is_admin() or (bucket_id in ('assets','audio','brand') and (storage.foldername(name))[1]=auth.uid()::text));
--- Validators preview the composed file once it is ready for review.
-drop policy if exists rimco_storage_read on storage.objects;
-create policy rimco_storage_read on storage.objects for select to authenticated using(
-  public.is_admin() or
-  (bucket_id='brand' and (storage.foldername(name))[1]=auth.uid()::text) or
-  (bucket_id='brand' and exists(select 1 from public.assets a join public.profiles p on p.id=auth.uid() and p.brand_id=a.brand_id and p.is_active where a.path=name and a.kind='logo' and a.status='validée')) or
-  (bucket_id in ('assets','audio') and (storage.foldername(name))[1]=auth.uid()::text) or
-  (bucket_id='assets' and exists(select 1 from public.assets a where a.path=name and a.status='validée')) or
-  (bucket_id='audio' and exists(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
+create trigger guard_validation_update_trigger before update on public.validations for …1109 tokens truncated…ts(select 1 from public.assets a where a.path=name and a.kind='audio' and a.status='validée')) or
   (bucket_id='videos' and exists(select 1 from public.videos v join public.video_versions vv on vv.video_id=v.id where v.user_id=auth.uid() and v.status='approved' and vv.final_path=name)) or
   (bucket_id='videos' and exists(select 1 from public.profiles p join public.videos v on v.brand_id=p.brand_id and v.department=p.department and v.status='review' join public.video_versions vv on vv.video_id=v.id where p.id=auth.uid() and p.role='valideur' and p.is_active and vv.final_path=name))
 );
@@ -477,3 +435,91 @@ alter table public.video_shots enable row level security;
 drop policy if exists video_shots_admin_read on public.video_shots;
 create policy video_shots_admin_read on public.video_shots for select to authenticated using (public.is_admin());
 create index if not exists video_shots_version_status_idx on public.video_shots(version_id, shot_number, status);
+
+-- 0011_remove_app_budget_cap.sql: provider spending cap lives in fal.ai; app keeps cost accounting.
+-- Fal owns the provider spending cap. Keep usage_ledger for cost reporting,
+-- but remove application-level budget rejection from reserve and settle RPCs.
+drop function if exists public.reserve_budget(uuid,uuid,uuid,numeric,numeric,numeric,numeric,numeric,numeric,text,numeric);
+drop function if exists public.reserve_llm_budget(uuid,uuid,numeric,numeric,numeric,numeric,text);
+drop function if exists public.settle_budget(uuid,text,numeric,numeric,numeric,numeric);
+
+create function public.reserve_budget(
+  p_user_id uuid,p_version_id uuid,p_model_id uuid,p_seconds numeric,p_price_usd_second numeric,
+  p_usd_to_eur numeric,p_eur_to_fcfa numeric,p_price_fcfa numeric,
+  p_department text,p_applied_fcfa_second numeric
+) returns uuid language plpgsql security definer set search_path = '' as $$
+declare entry_id uuid; estimated_usd numeric; estimated_eur numeric;
+begin
+  if p_seconds is null or p_seconds <= 0 or p_price_usd_second is null or p_price_usd_second < 0
+    or p_usd_to_eur is null or p_usd_to_eur <= 0 or p_eur_to_fcfa is null or p_eur_to_fcfa <= 0
+    or p_price_fcfa is null or p_price_fcfa < 0 or p_applied_fcfa_second is null or p_applied_fcfa_second < 0 then
+    raise exception using errcode='22023', message='Paramètres de réservation invalides';
+  end if;
+  if not exists(select 1 from public.profiles p where p.id=p_user_id and p.is_active)
+    or not exists(select 1 from public.video_versions vv join public.videos v on v.id=vv.video_id where vv.id=p_version_id and v.user_id=p_user_id)
+    or not exists(select 1 from public.ai_models m where m.id=p_model_id and m.is_active) then
+    raise exception using errcode='22023', message='Réservation impossible pour cette version';
+  end if;
+  estimated_usd := p_seconds * p_price_usd_second;
+  estimated_eur := estimated_usd * p_usd_to_eur;
+  insert into public.usage_ledger(version_id,user_id,department,ai_model_id,kind,seconds,cost_usd,cost_eur,cost_real_fcfa,applied_fcfa_per_second,price_fcfa,status)
+  values(p_version_id,p_user_id,coalesce(p_department,''),p_model_id,'generation',p_seconds,estimated_usd,estimated_eur,estimated_eur*p_eur_to_fcfa,p_applied_fcfa_second,p_price_fcfa,'reserved') returning id into entry_id;
+  return entry_id;
+end $$;
+revoke all on function public.reserve_budget(uuid,uuid,uuid,numeric,numeric,numeric,numeric,numeric,text,numeric) from public, anon, authenticated;
+grant execute on function public.reserve_budget(uuid,uuid,uuid,numeric,numeric,numeric,numeric,numeric,text,numeric) to service_role;
+
+create function public.reserve_llm_budget(
+  p_user_id uuid,p_version_id uuid,p_max_cost_usd numeric,
+  p_usd_to_eur numeric,p_eur_to_fcfa numeric,p_department text
+) returns uuid language plpgsql security definer set search_path = '' as $$
+declare entry_id uuid; estimated_eur numeric;
+begin
+  if p_max_cost_usd is null or p_max_cost_usd <= 0 or p_usd_to_eur is null or p_usd_to_eur <= 0
+    or p_eur_to_fcfa is null or p_eur_to_fcfa <= 0 then
+    raise exception using errcode='22023', message='Paramètres de réservation LLM invalides';
+  end if;
+  if not exists(select 1 from public.profiles p where p.id=p_user_id and p.is_active)
+    or not exists(select 1 from public.video_versions vv join public.videos v on v.id=vv.video_id where vv.id=p_version_id and v.user_id=p_user_id) then
+    raise exception using errcode='22023', message='Réservation LLM impossible pour cette version';
+  end if;
+  estimated_eur := p_max_cost_usd * p_usd_to_eur;
+  insert into public.usage_ledger(version_id,user_id,department,ai_model_id,kind,seconds,cost_usd,cost_eur,cost_real_fcfa,applied_fcfa_per_second,price_fcfa,status)
+  values(p_version_id,p_user_id,coalesce(p_department,''),null,'generation',1,p_max_cost_usd,estimated_eur,estimated_eur*p_eur_to_fcfa,0,0,'reserved') returning id into entry_id;
+  return entry_id;
+end $$;
+revoke all on function public.reserve_llm_budget(uuid,uuid,numeric,numeric,numeric,text) from public, anon, authenticated;
+grant execute on function public.reserve_llm_budget(uuid,uuid,numeric,numeric,numeric,text) to service_role;
+
+create function public.settle_budget(
+  p_entry_id uuid,p_outcome text,p_actual_cost_usd numeric,p_usd_to_eur numeric,p_eur_to_fcfa numeric
+) returns void language plpgsql security definer set search_path = '' as $$
+declare entry public.usage_ledger%rowtype; final_eur numeric; final_usd numeric; client_price_fcfa numeric;
+begin
+  if p_outcome not in ('charged','released') or p_usd_to_eur is null or p_usd_to_eur <= 0
+    or p_eur_to_fcfa is null or p_eur_to_fcfa <= 0
+    or (p_outcome='charged' and (p_actual_cost_usd is null or p_actual_cost_usd < 0)) then
+    raise exception using errcode='22023', message='Paramètres de clôture invalides';
+  end if;
+  select * into entry from public.usage_ledger where id=p_entry_id for update;
+  if not found or entry.status <> 'reserved' then
+    raise exception using errcode='P0001', message='Réservation introuvable ou déjà clôturée';
+  end if;
+  if p_outcome='released' then
+    update public.usage_ledger set status='released' where id=p_entry_id;
+    return;
+  end if;
+  final_usd := p_actual_cost_usd;
+  final_eur := final_usd * p_usd_to_eur;
+  client_price_fcfa := case when final_usd > 0 then ceil(final_eur * p_eur_to_fcfa * 1.30) else entry.price_fcfa end;
+  update public.usage_ledger
+    set status='charged', cost_usd=final_usd, cost_eur=final_eur,
+        cost_real_fcfa=final_eur*p_eur_to_fcfa,
+        price_fcfa=client_price_fcfa,
+        applied_fcfa_per_second=case when entry.seconds > 0 then client_price_fcfa / entry.seconds else 0 end
+    where id=p_entry_id;
+end $$;
+revoke all on function public.settle_budget(uuid,text,numeric,numeric,numeric) from public, anon, authenticated;
+grant execute on function public.settle_budget(uuid,text,numeric,numeric,numeric) to service_role;
+
+notify pgrst, 'reload schema';
