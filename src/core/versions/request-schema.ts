@@ -6,6 +6,7 @@ export const requestSchema = z.object({
   title: z.string().trim().max(120).default(''),
   assetId: z.string().min(1),
   audioAssetId: z.string().min(1).nullable().optional(),
+  overlayLogo: z.boolean().default(true),
   location: z.string().max(160).default(''),
   setting: z.string().max(160).default(''),
   character: z.string().max(160).default(''),
