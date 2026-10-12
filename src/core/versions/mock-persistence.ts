@@ -33,7 +33,7 @@ export async function createPersistedMockVersion(actor: Actor, input: CreateVers
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(503, 'Impossible de créer la simulation persistante. Vérifiez la configuration Supabase.');
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
-    video_id: video.id, number: 1, brief_json: { ...brief, mock_metadata: { priceFcfa, provider: 'mock' } }, audio_asset_id: input.audioAssetId ?? null,
+    video_id: video.id, number: 1, brief_json: { ...brief, overlayLogo: input.overlayLogo, mock_metadata: { priceFcfa, provider: 'mock' } }, audio_asset_id: input.audioAssetId ?? null,
     generated_prompt: prompt, ai_model_id: model.id, provider_request_id: `mock:${crypto.randomUUID()}`, status: 'queued', generation_seconds: 5,
   }).select('id,number,created_at').single();
   if (versionError || !version) {
