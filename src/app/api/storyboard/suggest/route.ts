@@ -9,6 +9,7 @@ import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { createFalLlmProvider } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
+import { findCuratedLocation } from '@/core/assets/location-catalog';
 
 const requestSchema = z.object({
   vehicleDossierId: z.string().uuid(),
@@ -35,10 +36,13 @@ export async function POST(request: Request) {
 
     let places: Array<{ id: string; title: string | null; category: string | null; path: string }> = [];
     if (input.placeIds.length) {
-      const { data, error } = await supabase.from('assets').select('id,title,category,path,kind,status,brand_id')
-        .in('id', input.placeIds).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId);
-      if (error || !data || data.length !== input.placeIds.length) throw new HttpError(422, 'Un ou plusieurs lieux ne sont pas disponibles pour votre marque.');
-      places = data;
+      const curated = input.placeIds.map(findCuratedLocation).filter((place) => place !== undefined);
+      const curatedIds = new Set<string>(curated.map((place) => place.id));
+      const uploadedIds = input.placeIds.filter((id) => !curatedIds.has(id));
+      const { data, error } = uploadedIds.length ? await supabase.from('assets').select('id,title,category,path,kind,status,brand_id')
+        .in('id', uploadedIds).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId) : { data: [], error: null };
+      if (error || !data || data.length !== uploadedIds.length) throw new HttpError(422, 'Un ou plusieurs lieux ne sont pas disponibles pour votre marque.');
+      places = [...curated.map((place) => ({ id: place.id, title: place.title, category: place.category, path: place.path })), ...data];
     }
     const route = getStoryboardModeRoute(input.mode);
     const selectedVehicle = vehiclePhotos.slice(0, route.maxReferenceImages);

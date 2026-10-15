@@ -20,6 +20,7 @@ type Asset = {
   review_reason?: string;
   vehicle_dossier_id?: string | null;
   photo_role?: string | null;
+  isCurated?: boolean;
 };
 type VehicleFolder = { id: string; make: string; model: string; color?: string | null };
 
@@ -266,6 +267,7 @@ export function MediaLibrary() {
                 <p className="text-[9px] font-bold uppercase tracking-[.18em] text-[#ad3d34]">{labelForKind(asset.kind)}</p>
                 <h3 className="mt-1.5 text-sm font-semibold">{asset.kind === 'vehicle' ? `${asset.make ?? 'Véhicule'} ${asset.model ?? ''}` : asset.title ?? labelForKind(asset.kind)}</h3>
                 <p className="mt-1 text-xs text-[#918c85]">{asset.kind === 'vehicle' ? [asset.angle, asset.color].filter(Boolean).join(' · ') || 'RIMCO Motors' : asset.category ?? asset.color ?? asset.variant ?? 'RIMCO Motors'}</p>
+                {asset.isCurated && <p className="mt-2 text-[10px] text-[#4e7656]">Lieu intégré · référence disponible dans les storyboards</p>}
                 {asset.status === 'rejetée' && asset.review_reason && <p className="mt-2 text-xs text-[#831810]">Motif : {asset.review_reason}</p>}
                 {isAdmin && asset.status === 'en_attente' && (
                   <ReviewControls
@@ -308,7 +310,7 @@ function AssetPreview({ asset }: { asset: Asset }) {
       {asset.previewUrl && asset.kind === 'audio' ? (
         <audio src={asset.previewUrl} controls aria-label={`Écouter ${asset.variant ?? 'la piste audio'}`} className="w-full p-4" />
       ) : asset.previewUrl ? (
-        <Image src={asset.previewUrl} alt={`${asset.make ?? ''} ${asset.model ?? ''} ${asset.color ?? ''}`.trim() || (asset.kind === 'logo' ? 'Logo de marque' : 'Média')} fill sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw" unoptimized className="object-cover" />
+        <Image src={asset.previewUrl} alt={`${asset.title ?? ''} ${asset.make ?? ''} ${asset.model ?? ''} ${asset.color ?? ''}`.trim() || (asset.kind === 'logo' ? 'Logo de marque' : 'Média')} fill sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 33vw" unoptimized className="object-cover" />
       ) : (
         <div className="flex h-full w-full items-center justify-center bg-[#e7ecee]">
           <span className="text-4xl text-[#667c87]">{asset.kind === 'audio' ? '♫' : asset.kind === 'logo' ? 'R' : '▱'}</span>

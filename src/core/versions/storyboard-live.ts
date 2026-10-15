@@ -12,6 +12,10 @@ import { generatedVideoSeconds, shotToPrompt, type StoryboardShot, validateStory
 import { assembleShotMontage } from '@/core/postproduction/pipeline';
 import type { CreateVersionInput } from './live';
 import { reserveGenerationCost, settleUsageCost } from '@/core/billing/ledger';
+import { findCuratedLocation, locationCatalog } from '@/core/assets/location-catalog';
+import { createFalClient } from '@fal-ai/client';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
@@ -40,9 +44,12 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   if (!model.allowed_formats?.includes(input.format)) throw new HttpError(422, `${route.label} ne prend pas en charge le format ${input.format}.`);
   if (input.audioAssetId) throw new HttpError(422, 'Les vidéos multi-plans sont sans audio pour le moment.');
 
-  const locationsQuery = input.placeIds.length ? await authenticated.from('assets').select('id,path,title,kind,status,brand_id').in('id', input.placeIds).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId) : { data: [], error: null };
-  if (locationsQuery.error || (locationsQuery.data ?? []).length !== input.placeIds.length) throw new HttpError(422, 'Un lieu sélectionné n’est plus disponible.');
-  const placeAssets = locationsQuery.data ?? [];
+  const curatedPlaces = input.placeIds.map(findCuratedLocation).filter((place) => place !== undefined);
+  const curatedIds = new Set<string>(curatedPlaces.map((place) => place.id));
+  const uploadedPlaceIds = input.placeIds.filter((id) => !curatedIds.has(id));
+  const locationsQuery = uploadedPlaceIds.length ? await authenticated.from('assets').select('id,path,title,kind,status,brand_id').in('id', uploadedPlaceIds).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId) : { data: [], error: null };
+  if (locationsQuery.error || (locationsQuery.data ?? []).length !== uploadedPlaceIds.length) throw new HttpError(422, 'Un lieu sélectionné n’est plus disponible.');
+  const placeAssets = [...curatedPlaces.map((place) => ({ id: place.id, path: place.path, title: place.title, kind: 'place' as const, status: 'validée' as const, brand_id: actor.brandId })), ...(locationsQuery.data ?? [])];
   const validVehiclePhotoIds = new Set(vehiclePhotos.map((photo) => photo.id));
   const validPlaceIds = new Set(placeAssets.map((photo) => photo.id));
   if (input.storyboard.some((shot) => !validVehiclePhotoIds.has(shot.vehiclePhotoId) || shot.locationPhotoId != null && !validPlaceIds.has(shot.locationPhotoId))) {
@@ -111,11 +118,24 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     throw new HttpError(503, 'Impossible d’enregistrer les plans du montage.');
   }
 
+  const falStorage = env.FAL_KEY ? createFalClient({ credentials: env.FAL_KEY }).storage : null;
+  const curatedUploads = new Map<string, Promise<string>>();
   const submissions = await Promise.allSettled(input.storyboard.map(async (shot, index) => {
     const vehiclePhoto = vehiclePhotos.find((photo) => photo.id === shot.vehiclePhotoId);
     const place = placeAssets.find((photo) => photo.id === shot.locationPhotoId);
     if (!vehiclePhoto) throw new HttpError(422, 'Le storyboard utilise une photo de véhicule non validée.');
     const refs = await Promise.all([vehiclePhoto.path, ...(place ? [place.path] : [])].map(async (path) => {
+      if (path.startsWith('/places/')) {
+        const curated = locationCatalog.find((entry) => entry.path === path);
+        if (!curated || !falStorage) throw new HttpError(422, 'La photo du lieu n’est pas une référence de la médiathèque.');
+        if (!curatedUploads.has(path)) {
+          curatedUploads.set(path, readFile(join(process.cwd(), 'public', path.slice(1))).then((bytes) => {
+            const mimeType = path.endsWith('.png') ? 'image/png' : 'image/jpeg';
+            return falStorage.upload(new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: mimeType }), { lifecycle: { expiresIn: '1d' } });
+          }));
+        }
+        return curatedUploads.get(path)!;
+      }
       const { data: signed, error } = await admin.storage.from('assets').createSignedUrl(path, 3600);
       if (error || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer une image de référence.');
       return signed.signedUrl;

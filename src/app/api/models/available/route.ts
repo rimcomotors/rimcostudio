@@ -15,7 +15,7 @@ export async function GET() {
       .eq('is_active', true);
     if (error) throw new HttpError(503, 'Impossible de charger les modèles disponibles.');
     const models = (data ?? []).flatMap((model) => {
-      if (model.tier !== 'standard' && model.tier !== 'premium') return [];
+      if (model.tier !== 'standard' && model.tier !== 'pro' && model.tier !== 'premium') return [];
       const tier = model.tier as GenerationTier;
       const durations = getRoutedDurations(tier).filter((duration) => isModelOnRoute({ tier: model.tier, adapterFamily: model.adapter_family, endpoint: model.fal_endpoint_id, allowedDurations: model.allowed_durations }, tier, duration));
       if (!durations.length) return [];

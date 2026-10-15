@@ -38,12 +38,12 @@ export async function GET(request: Request) {
       const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
       const versions = records.map((latest) => {
         const status = latest.reviewStatus === 'approved' ? 'ready' : latest.reviewStatus === 'rejected' ? 'rejected' : latest.reviewStatus === 'pending' ? 'review' : latest.status;
-        return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
+        return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, tier: latest.tier ?? 'standard', durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
       }).filter((item) => !requestedStatus || item.status === requestedStatus);
       return NextResponse.json({ versions });
     }
     const admin = createStorageAdminClient();
-    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(id,status),usage_ledger(kind,ai_model_id,seconds,cost_usd,price_fcfa,status))').order('created_at', { ascending: false });
+    let query = admin.from('videos').select('id,user_id,title,status,department,brand_id,created_at,video_versions(id,number,status,generation_seconds,final_path,raw_path,provider_request_id,brief_json,generated_prompt,created_at,validations(id,status),model:ai_models(name,tier),usage_ledger(kind,ai_model_id,seconds,cost_usd,price_fcfa,status))').order('created_at', { ascending: false });
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     if (actor.role === 'valideur') {
       if (!actor.brandId) return NextResponse.json({ versions: [] });
@@ -62,6 +62,8 @@ export async function GET(request: Request) {
       const canPreviewReady = video.status === 'approved' || video.status === 'ready' && (isOwner || actor.role === 'admin');
       const canPreview = canPreviewReady || canPreviewReview || video.status === 'review' && isOwner;
       const briefData = latest?.brief_json && typeof latest.brief_json === 'object' ? latest.brief_json as Record<string, unknown> : {};
+      const model = Array.isArray(latest?.model) ? latest.model[0] : latest?.model;
+      const generationTier = model?.tier === 'pro' || model?.tier === 'premium' || model?.tier === 'test' ? model.tier : 'standard';
       const mockMetadata = briefData.mock_metadata && typeof briefData.mock_metadata === 'object' ? briefData.mock_metadata as Record<string, unknown> : {};
       const isPersistedMock = latest?.provider_request_id?.startsWith('mock:') ?? false;
       let videoUrl: string | null = null;
@@ -91,7 +93,7 @@ export async function GET(request: Request) {
       }
       if (video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, previewSource, createdAt: video.created_at, department: video.department, userId: video.user_id };
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, modelName: model?.name ?? null, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, previewSource, createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
@@ -121,7 +123,7 @@ export async function POST(request: Request) {
     const imageUrl = '/mock/mock-video.svg';
     const { requestId } = await mockVideoProvider.submit({ prompt, imageUrl, durationS: 5, format: input.format });
     const id = crypto.randomUUID();
-    const record = putVersion({ id, videoId: crypto.randomUUID(), title: input.title || undefined, number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: estimatePriceFcfa(5, input.tier), createdAt: new Date().toISOString() });
+    const record = putVersion({ id, videoId: crypto.randomUUID(), title: input.title || undefined, number: 1, userId: actor.id, brief, prompt, status: 'queued', requestId, priceFcfa: estimatePriceFcfa(5, input.tier), tier: input.tier, createdAt: new Date().toISOString() });
     return NextResponse.json({ id: record.id, status: record.status, prompt, estimatedPriceFcfa: record.priceFcfa, version: 1 }, { status: 201 });
   } catch (error) { return errorResponse(error); }
 }

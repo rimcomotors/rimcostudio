@@ -4,6 +4,7 @@ import { estimatePriceFcfa, estimateRealCost, formatFcfa } from './pricing';
 describe('pricing',()=>{
   it('applies the fixed five-second client price by tier',()=>{
     expect(estimatePriceFcfa(5,'standard')).toBe(2300);
+    expect(estimatePriceFcfa(5,'pro')).toBe(3500);
     expect(estimatePriceFcfa(5,'premium')).toBe(3500);
     expect(estimatePriceFcfa(5,'test')).toBe(3500);
   });

@@ -30,7 +30,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const authenticated = await createSupabaseServerClient();
   const admin = createStorageAdminClient();
   const expectedTier = input.tier;
-  const route = input.tier === 'standard' || input.tier === 'premium' ? getRouteForGeneration(input.tier, input.durationS) : null;
+  const route = input.tier === 'standard' || input.tier === 'pro' || input.tier === 'premium' ? getRouteForGeneration(input.tier, input.durationS) : null;
   if (!route) throw new HttpError(422, 'Cette combinaison de niveau et de durée n’est pas disponible.');
   const expectedEndpoint = route.endpoint;
   const [{ data: asset, error: assetError }, { data: model, error: modelError }] = await Promise.all([

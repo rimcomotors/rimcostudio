@@ -1,4 +1,4 @@
-export type Tier = 'standard'|'premium'|'test';
+export type Tier = 'standard'|'pro'|'premium'|'test';
 export const CLIENT_MARKUP_RATE = 0.30;
 
 function assertPositive(value:number,label:string):void {

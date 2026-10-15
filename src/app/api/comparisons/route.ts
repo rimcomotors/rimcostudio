@@ -102,7 +102,7 @@ export async function POST(request: Request) {
     let shared: { brief: import('@/core/brief').Brief; prompt: string } | undefined;
     for (const model of models) {
       try {
-        const tier = model.tier === 'test' ? 'test' : model.tier === 'standard' ? 'standard' : 'premium';
+        const tier = model.tier === 'test' ? 'test' : model.tier === 'standard' ? 'standard' : model.tier === 'pro' ? 'pro' : 'premium';
         const result = await createLiveVersion(actor, { ...commonRequest, tier }, { modelId: model.id, ...(shared ? { reuse: shared } : {}) });
         if ('brief' in result) shared ??= { brief: result.brief, prompt: result.prompt };
         results.push({ modelId: model.id, modelName: model.name, versionId: result.id, status: result.status });

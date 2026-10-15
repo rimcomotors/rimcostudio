@@ -5,6 +5,7 @@ import { env } from '@/env';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { assertPlaceUploadAdmin, assertVehicleDossierAdmin } from '@/core/assets/permissions';
+import { curatedLocationAsset, locationCatalog } from '@/core/assets/location-catalog';
 
 export async function GET(request: Request) {
   try {
@@ -20,7 +21,8 @@ export async function GET(request: Request) {
       const search = new URL(request.url).searchParams;
       const kind = search.get('kind');
       const status = search.get('status');
-      return NextResponse.json({ assets: fixtures.filter((asset) => (!kind || asset.kind === kind) && (!status || asset.status === status)) });
+      const demoAssets = [...fixtures.filter((asset) => asset.kind !== 'place'), ...locationCatalog.map(curatedLocationAsset)];
+      return NextResponse.json({ assets: demoAssets.filter((asset) => (!kind || asset.kind === kind) && (!status || asset.status === status)) });
     }
     const supabase = await createSupabaseServerClient();
     let query = supabase.from('assets').select('id,kind,title,category,make,model,color,angle,variant,path,status,review_reason').order('created_at', { ascending: false });
@@ -40,7 +42,8 @@ export async function GET(request: Request) {
       const { data: signed } = await supabase.storage.from(bucket).createSignedUrl(asset.path, 3600);
       return { ...asset, previewUrl: signed?.signedUrl ?? null };
     }));
-    return NextResponse.json({ assets });
+    const curatedPlaces = locationCatalog.map(curatedLocationAsset).filter(() => (!requestedKind || requestedKind === 'place') && (!requestedStatus || requestedStatus === 'validée'));
+    return NextResponse.json({ assets: [...curatedPlaces, ...assets] });
   } catch (error) { return errorResponse(error); }
 }
 

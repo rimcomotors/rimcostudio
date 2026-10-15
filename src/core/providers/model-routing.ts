@@ -1,4 +1,4 @@
-export type GenerationTier = 'standard' | 'premium';
+export type GenerationTier = 'standard' | 'pro' | 'premium';
 export type AdapterFamily = 'wan' | 'kling' | 'veo' | 'seedance';
 
 export const MODEL_ENDPOINTS = {
@@ -11,8 +11,9 @@ export const MODEL_ENDPOINTS = {
 /** Matrice métier verrouillée : l’interface et l’API doivent suivre cette table. */
 export const LOCKED_MODEL_POLICY = [
   { tier: 'standard', duration: 5, model: 'Wan 3.0' },
-  { tier: 'standard', duration: 10, model: 'Kling O3 Pro' },
-  { tier: 'standard', duration: 15, model: 'Kling O3 Pro' },
+  { tier: 'pro', duration: 5, model: 'Kling O3 Pro' },
+  { tier: 'pro', duration: 10, model: 'Kling O3 Pro' },
+  { tier: 'pro', duration: 15, model: 'Kling O3 Pro' },
   { tier: 'premium', duration: 5, model: 'Veo 3.1 Fast' },
   { tier: 'premium', duration: 10, model: 'Seedance 2.5' },
   { tier: 'premium', duration: 15, model: 'Seedance 2.5' },
@@ -31,8 +32,11 @@ type Route = {
 const ROUTES: Record<GenerationTier, Record<number, Route>> = {
   standard: {
     5: { tier: 'standard', adapterFamily: 'wan', endpoint: MODEL_ENDPOINTS.wan, outputDuration: 5, sourceDuration: 5 },
-    10: { tier: 'standard', adapterFamily: 'kling', endpoint: MODEL_ENDPOINTS.kling, outputDuration: 10, sourceDuration: 10 },
-    15: { tier: 'standard', adapterFamily: 'kling', endpoint: MODEL_ENDPOINTS.kling, outputDuration: 15, sourceDuration: 15 },
+  },
+  pro: {
+    5: { tier: 'pro', adapterFamily: 'kling', endpoint: MODEL_ENDPOINTS.kling, outputDuration: 5, sourceDuration: 5 },
+    10: { tier: 'pro', adapterFamily: 'kling', endpoint: MODEL_ENDPOINTS.kling, outputDuration: 10, sourceDuration: 10 },
+    15: { tier: 'pro', adapterFamily: 'kling', endpoint: MODEL_ENDPOINTS.kling, outputDuration: 15, sourceDuration: 15 },
   },
   premium: {
     5: { tier: 'premium', adapterFamily: 'veo', endpoint: MODEL_ENDPOINTS.veo, outputDuration: 5, sourceDuration: 6 },
