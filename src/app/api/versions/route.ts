@@ -46,26 +46,40 @@ export async function GET(request: Request) {
       const ledgerRows = Array.isArray(latest?.usage_ledger) ? latest.usage_ledger : [];
       const generationCost = aggregateGenerationCost(ledgerRows, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
       const canPreviewReview = video.status === 'review' && (actor.role === 'admin' || actor.role === 'valideur' && video.brand_id === actor.brandId && video.department === actor.department);
-      const latestIsMock = latest?.provider_request_id?.startsWith('mock:') ?? false;
       const isOwner = video.user_id === actor.id;
-      const path = video.status === 'approved' || video.status === 'ready' && isOwner ? latest?.final_path ?? (latestIsMock ? latest?.raw_path : null) : canPreviewReview || video.status === 'review' && isOwner ? latestIsMock ? latest?.raw_path : latest?.final_path : null;
+      const canPreviewReady = video.status === 'approved' || video.status === 'ready' && (isOwner || actor.role === 'admin');
+      const canPreview = canPreviewReady || canPreviewReview || video.status === 'review' && isOwner;
       const briefData = latest?.brief_json && typeof latest.brief_json === 'object' ? latest.brief_json as Record<string, unknown> : {};
       const mockMetadata = briefData.mock_metadata && typeof briefData.mock_metadata === 'object' ? briefData.mock_metadata as Record<string, unknown> : {};
       const isPersistedMock = latest?.provider_request_id?.startsWith('mock:') ?? false;
       let videoUrl: string | null = null;
       let previewUrl: string | null = null;
-      if (path && isPersistedMock) previewUrl = '/mock/mock-video.mp4';
-      else if (path) {
-        const storage = admin.storage.from('videos');
-        const { data: signed } = await storage.createSignedUrl(path, 3600);
-        previewUrl = signed?.signedUrl ?? null;
-        if (video.status === 'approved') {
-          videoUrl = await createSignedVideoDownloadUrl((storagePath, expiresIn, options) => storage.createSignedUrl(storagePath, expiresIn, options), path);
+      let previewSource: 'final' | 'raw' | null = null;
+      const finalPath = latest?.final_path ?? null;
+      const rawPath = latest?.raw_path ?? null;
+      const storage = admin.storage.from('videos');
+      if (canPreview && isPersistedMock && (finalPath || rawPath)) {
+        previewUrl = '/mock/mock-video.mp4';
+        previewSource = finalPath ? 'final' : 'raw';
+      } else if (canPreview) {
+        const previewPaths = [
+          ...(finalPath ? [{ path: finalPath, source: 'final' as const }] : []),
+          ...(rawPath && rawPath !== finalPath ? [{ path: rawPath, source: 'raw' as const }] : []),
+        ];
+        for (const candidate of previewPaths) {
+          const { data: signed } = await storage.createSignedUrl(candidate.path, 3600);
+          if (!signed?.signedUrl) continue;
+          previewUrl = signed.signedUrl;
+          previewSource = candidate.source;
+          break;
         }
       }
-      if (video.status === 'approved' && isPersistedMock) videoUrl = previewUrl;
+      if (video.status === 'approved' && finalPath) {
+        videoUrl = await createSignedVideoDownloadUrl((storagePath, expiresIn, options) => storage.createSignedUrl(storagePath, expiresIn, options), finalPath);
+      }
+      if (video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, createdAt: video.created_at, department: video.department, userId: video.user_id };
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, previewSource, createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
