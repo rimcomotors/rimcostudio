@@ -65,9 +65,9 @@ if (mockWithoutSupabase) {
     await expect(page.getByText('Workflow multi-plans')).toBeVisible();
   });
 
-  test('collaborateur génère, visionne et télécharge la vidéo simulée', async ({ page }) => {
+  test('administrateur génère, visionne et télécharge la vidéo simulée', async ({ page }) => {
     test.setTimeout(90_000);
-    await signIn(page, creatorEmail, adminPassword);
+    await signIn(page, adminEmail, adminPassword);
     await page.goto('/studio');
     const logoToggle = page.getByRole('checkbox', { name: /Ajouter le logo RIMCO/ });
     await expect(logoToggle).toBeChecked();
