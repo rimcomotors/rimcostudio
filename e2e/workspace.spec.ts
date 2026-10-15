@@ -58,7 +58,7 @@ if (mockWithoutSupabase) {
     await signIn(page, adminEmail, adminPassword);
     await expect(page).toHaveURL('/');
     await expect(page.getByRole('heading', { name: /^Bonjour / })).toBeVisible();
-    await page.getByRole('link', { name: 'Créer une vidéo' }).click();
+    await page.getByRole('link', { name: 'Créer la vidéo' }).click();
     await expect(page.getByRole('heading', { name: 'Créer une vidéo' })).toBeVisible();
     await expect(page.getByText('1. Choisissez le véhicule')).toBeVisible();
     await expect(page.getByText('2. Choisissez une scène')).toBeVisible();
