@@ -15,8 +15,20 @@ import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
 import { deleteVersionsByVideoIds } from '@/core/versions/store';
 import { aggregateGenerationCost } from '@/core/billing/aggregate';
+import { storyboardSchema, validateStoryboard } from '@/core/storyboard';
+import { createLiveStoryboard } from '@/core/versions/storyboard-live';
+import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 
 const deleteSchema = z.object({ videoIds: z.array(z.string().uuid()).min(1).max(50) }).strict().refine((input) => new Set(input.videoIds).size === input.videoIds.length, { message: 'La sélection contient des doublons.' });
+const multiClipSchema = requestSchema.extend({
+  workflow: z.literal('multi_clip'),
+  storyMode: z.enum(['standard', 'pro', 'premium']),
+  finalDurationSeconds: z.union([z.literal(15), z.literal(20)]),
+  purpose: z.enum(['presentation', 'advertising']),
+  vehicleDossierId: z.string().uuid(),
+  placeIds: z.array(z.string().uuid()).max(12).default([]),
+  storyboard: storyboardSchema,
+}).strict();
 
 export async function GET(request: Request) {
   try {
@@ -87,7 +99,17 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const actor = await getActor();
-    const input = requestSchema.parse(await request.json());
+    const payload = await request.json();
+    if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'multi_clip') {
+      const multi = multiClipSchema.parse(payload);
+      validateStoryboard(multi.storyboard, multi.finalDurationSeconds, getStoryboardModeRoute(multi.storyMode).adapterFamily);
+      if (multi.format !== '16:9' || multi.audioAssetId) throw new HttpError(422, 'Le storyboard multi-plans utilise le format horizontal 16:9, sans audio.');
+      if (env.PROVIDERS_MODE === 'mock') {
+        return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du storyboard multi-plans.', completedShots: multi.storyboard.length, totalShots: multi.storyboard.length, estimatedPriceFcfa: 0 }, { status: 201 });
+      }
+      return NextResponse.json(await createLiveStoryboard(actor, multi), { status: 201 });
+    }
+    const input = requestSchema.parse(payload);
     if (env.PROVIDERS_MODE === 'mock' && input.durationS !== 5) throw new HttpError(422, 'Les durées longues sont disponibles uniquement sur un déploiement connecté à fal.ai.');
     if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
     const selectedScene = input.scenePresetId ? getScenePreset(input.scenePresetId) : undefined;

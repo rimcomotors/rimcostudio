@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { makeFinalVideoArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo } from './ffmpeg-args';
+import { makeFinalVideoArgs, makeMultiClipMontageArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo } from './ffmpeg-args';
 
 const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -111,14 +111,16 @@ export async function assembleShotMontage(versionId: string) {
   if (version.final_path) return { finalPath: version.final_path as string };
 
   const { data: shots, error: shotsError } = await admin.from('video_shots')
-    .select('shot_number,status,raw_path')
+    .select('shot_number,duration_seconds,status,raw_path')
     .eq('version_id', versionId).order('shot_number');
-  if (shotsError || !shots || shots.length !== 2 || shots.some((shot) => shot.status !== 'ready' || !shot.raw_path)) {
-    throw new HttpError(409, 'Les deux plans doivent être prêts avant leur assemblage.');
+  const brief = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
+  const isMultiClip = brief.multiClipMode === true;
+  if (shotsError || !shots || (isMultiClip ? shots.length < 2 || shots.length > 6 : shots.length !== 2) || shots.some((shot) => shot.status !== 'ready' || !shot.raw_path)) {
+    throw new HttpError(409, 'Tous les plans doivent être prêts avant leur assemblage.');
   }
   const overlayLogo = shouldOverlayLogo(version.brief_json);
   const briefFormat = normalizeVideoFormat(version.brief_json && typeof version.brief_json === 'object' ? (version.brief_json as { format?: unknown }).format : undefined);
-  if (overlayLogo) {
+  if (overlayLogo || isMultiClip) {
     try { await access(logoFile, constants.R_OK); }
     catch { throw new HttpError(503, 'Le logo RIMCO est indisponible sur ce déploiement.'); }
   }
@@ -128,11 +130,13 @@ export async function assembleShotMontage(versionId: string) {
   const clipBytes = await Promise.all(shots.map((shot, index) => downloadAsset(admin, 'videos', shot.raw_path, MAX_VIDEO_BYTES, `Le plan ${index + 1}`)));
   clipBytes.forEach(validateMp4);
   const directory = await mkdtemp(join(tmpdir(), 'rimco-montage-'));
-  const clipFiles = [join(directory, 'shot-1.mp4'), join(directory, 'shot-2.mp4')];
+  const clipFiles = shots.map((shot) => join(directory, `shot-${shot.shot_number}.mp4`));
   const outputFile = join(directory, 'montage.mp4');
   try {
     await Promise.all(clipFiles.map((path, index) => writeFile(path, clipBytes[index])));
-    const args = makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6, format: briefFormat });
+    const args = isMultiClip
+      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: shots.map((shot) => Number(shot.duration_seconds)), logoFile, outputFile, finalDurationSeconds: Number(brief.finalDurationSeconds) as 15 | 20, format: briefFormat })
+      : makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6, format: briefFormat });
     await runFfmpeg(ffmpegPath, args);
     const outputStat = await stat(outputFile);
     if (outputStat.size > MAX_VIDEO_BYTES) throw new HttpError(502, 'Le montage dépasse la taille autorisée.');

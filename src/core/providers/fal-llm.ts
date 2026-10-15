@@ -46,16 +46,16 @@ function parseJson(text: string): unknown {
   return JSON.parse(normalized) as unknown;
 }
 
-async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodType<T>) {
+async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodType<T>, instructions = systemPrompt) {
   let lastIssue = 'La réponse ne respecte pas le format attendu.';
   let costUsd = 0;
   let hasReportedCost = false;
   let completedRequests = 0;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-      const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire: la réponse précédente était invalide (${lastIssue}). Renvoie un objet JSON valide avec uniquement les clés autorisées: ${fieldNames}.`;
+      const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire: la réponse précédente était invalide (${lastIssue}). Respecte exactement le schéma JSON demandé.`;
     let response: unknown;
     try {
-      response = await call(request, systemPrompt);
+      response = await call(request, instructions);
     } catch {
       throw new FalLlmBriefError('L’appel au fournisseur LLM a échoué.', completedRequests, hasReportedCost ? costUsd : null);
     }
@@ -94,8 +94,12 @@ export function createFalLlmProvider(call: LlmCall) {
       const selectedOptions = Object.fromEntries(Object.entries(options).filter(([key, value]) => key === 'vehicle_asset_id' || key === 'vehicle_description' || value.trim().length > 0));
       return { brief: briefSchema.parse({ vehicle_asset_id: options.vehicle_asset_id || 'mock-vehicle', vehicle_description: options.vehicle_description || description, ...generated.fields, ...selectedOptions, duration_s: Number(options.duration_s ?? 5) }), costUsd: generated.costUsd };
     },
+    async buildStoryboardWithCost<T>(prompt: string, schema: z.ZodType<T>, instructions: string): Promise<{ fields: T; costUsd: number | null }> {
+      return validatedFields(call, prompt, schema, instructions);
+    },
   } satisfies LlmProvider & {
     buildBriefWithCost(description: string, options: Record<string, string>): Promise<{ brief: Brief; costUsd: number | null }>;
+    buildStoryboardWithCost<T>(prompt: string, schema: z.ZodType<T>, instructions: string): Promise<{ fields: T; costUsd: number | null }>;
   };
 }
 

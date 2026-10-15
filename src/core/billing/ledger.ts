@@ -54,7 +54,7 @@ export async function reserveGenerationCost(admin: AdminClient, input: {
 
 export async function reserveLlmCost(admin: AdminClient, input: {
   userId: string;
-  versionId: string;
+  versionId?: string;
   department: string;
   maxCostUsd: number;
   usdToEur: number;
@@ -65,7 +65,7 @@ export async function reserveLlmCost(admin: AdminClient, input: {
   ensurePositiveFinite(input.eurToFcfa, 'taux EUR/FCFA');
   const costEur = input.maxCostUsd * input.usdToEur;
   const { data, error } = await admin.from('usage_ledger').insert({
-    version_id: input.versionId,
+    version_id: input.versionId ?? null,
     user_id: input.userId,
     department: input.department,
     ai_model_id: null,

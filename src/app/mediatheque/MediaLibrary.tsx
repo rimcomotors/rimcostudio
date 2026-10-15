@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import Image from 'next/image';
 import { createSupabaseBrowserClient } from '@/core/supabase/browser';
 
@@ -18,7 +18,10 @@ type Asset = {
   previewUrl?: string;
   path?: string;
   review_reason?: string;
+  vehicle_dossier_id?: string | null;
+  photo_role?: string | null;
 };
+type VehicleFolder = { id: string; make: string; model: string; color?: string | null };
 
 const kinds: Array<[Asset['kind'], string]> = [
   ['vehicle', 'Véhicule'],
@@ -45,9 +48,17 @@ export function MediaLibrary() {
   const [make, setMake] = useState('');
   const [model, setModel] = useState('');
   const [color, setColor] = useState('');
+  const [angle, setAngle] = useState('3/4 avant');
   const [rejecting, setRejecting] = useState('');
   const [reason, setReason] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
+  const [vehicleFolders, setVehicleFolders] = useState<VehicleFolder[]>([]);
+  const [dossierMake, setDossierMake] = useState('');
+  const [dossierModel, setDossierModel] = useState('');
+  const [dossierColor, setDossierColor] = useState('');
+  const [selectedDossierId, setSelectedDossierId] = useState('');
+  const [photoRole, setPhotoRole] = useState<'exterior' | 'interior' | 'detail'>('exterior');
+  const [placeTitle, setPlaceTitle] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -66,6 +77,12 @@ export function MediaLibrary() {
   useEffect(() => {
     void fetch('/api/me').then((response) => response.ok ? response.json() : null).then((data) => setIsAdmin(data?.actor?.role === 'admin')).catch(() => setIsAdmin(false));
   }, []);
+  const loadVehicleFolders = useCallback(async () => {
+    const response = await fetch('/api/vehicles');
+    const data = await response.json();
+    if (response.ok) setVehicleFolders(data.vehicles ?? []);
+  }, []);
+  useEffect(() => { if (isAdmin) void loadVehicleFolders(); }, [isAdmin, loadVehicleFolders]);
   useEffect(() => { void load(); }, [load]);
 
   async function upload(file: File) {
@@ -79,7 +96,8 @@ export function MediaLibrary() {
         : ['image/jpeg', 'image/png', 'image/webp'];
       if (!accepted.includes(file.type)) throw new Error('Format accepté : JPG, PNG ou WebP pour une image; MP3, WAV ou M4A pour un audio.');
       if (file.size > maxSize) throw new Error(`Le fichier dépasse la limite de ${kind === 'audio' ? '25' : '12'} Mo.`);
-      if (kind === 'vehicle' && (!make.trim() || !model.trim())) throw new Error('Renseignez la marque et le modèle avant le téléversement.');
+      if (kind === 'place' && !placeTitle.trim()) throw new Error('Indiquez un nom court pour ce lieu.');
+      if (kind === 'vehicle' && (!make.trim() || !model.trim()) && !(isAdmin && selectedDossierId)) throw new Error('Renseignez la marque et le modèle ou sélectionnez un dossier véhicule.');
 
       const signed = await fetch('/api/media/upload-url', {
         method: 'POST',
@@ -95,11 +113,12 @@ export function MediaLibrary() {
       const { error: uploadError } = await supabase.storage.from(bucket).uploadToSignedUrl(signedData.path, signedData.token, file, { contentType: file.type });
       if (uploadError) throw new Error('Le transfert a échoué. Vérifiez votre connexion puis réessayez.');
 
+      const folder = vehicleFolders.find((item) => item.id === selectedDossierId);
       const metadata = kind === 'vehicle'
-        ? { make: make.trim(), model: model.trim(), color: color.trim(), angle: '3/4 avant' }
+        ? { make: make.trim() || folder?.make || '', model: model.trim() || folder?.model || '', color: color.trim() || folder?.color || '', angle: angle.trim(), ...(isAdmin && selectedDossierId ? { title: angle.trim(), vehicleDossierId: selectedDossierId, photoRole } : {}) }
         : kind === 'logo'
           ? { variant: 'rouge' }
-          : { title: file.name.replace(/\.[^.]+$/, ''), category: kind };
+          : { title: kind === 'place' && placeTitle.trim() ? placeTitle.trim() : file.name.replace(/\.[^.]+$/, ''), category: kind };
       const saved = await fetch('/api/assets', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -109,11 +128,26 @@ export function MediaLibrary() {
       if (!saved.ok) throw new Error(savedData.error ?? 'Le fichier est transféré, mais son enregistrement a échoué.');
       setNotice('Fichier ajouté. Il sera visible dans la médiathèque après validation par l’administration.');
       await load();
+      if (kind === 'vehicle' && selectedDossierId) await loadVehicleFolders();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Une erreur est survenue.');
     } finally {
       setBusy(false);
     }
+  }
+
+  async function createVehicleFolder() {
+    setError(''); setNotice(''); setBusy(true);
+    try {
+      const response = await fetch('/api/vehicles', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ make: dossierMake, model: dossierModel, color: dossierColor }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? 'Impossible de créer ce dossier véhicule.');
+      await loadVehicleFolders();
+      setSelectedDossierId(data.vehicle.id);
+      setDossierMake(''); setDossierModel(''); setDossierColor('');
+      setNotice('Dossier créé. Ajoutez les photos intérieur, extérieur et détails à ce dossier.');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Impossible de créer ce dossier.'); }
+    finally { setBusy(false); }
   }
 
   async function approve(asset: Asset, status: Asset['status']) {
@@ -139,6 +173,10 @@ export function MediaLibrary() {
   }
 
   const filtered = assets.filter((asset) => filter === 'all' || asset.kind === filter);
+  const availableKinds = kinds.filter(([value]) => isAdmin || value !== 'place');
+  const visibleAssets = filter === 'vehicle'
+    ? [...filtered].sort((left, right) => `${left.make ?? ''} ${left.model ?? ''}`.localeCompare(`${right.make ?? ''} ${right.model ?? ''}`, 'fr'))
+    : filtered;
   const pending = assets.filter((asset) => asset.status === 'en_attente').length;
 
   return (
@@ -146,7 +184,7 @@ export function MediaLibrary() {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex gap-2 rounded-lg border border-[#e4e1db] bg-[#f5f5f3] p-1">
-            {([['all', 'Tout'], ...kinds] as Array<['all' | Asset['kind'], string]>).map(([value, label]) => (
+            {([['all', 'Tout'], ...availableKinds] as Array<['all' | Asset['kind'], string]>).map(([value, label]) => (
               <button key={value} onClick={() => {
                 setFilter(value);
                 if (value !== 'all') {
@@ -166,7 +204,7 @@ export function MediaLibrary() {
               setError('');
               setNotice('');
             }} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2">
-              {kinds.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              {availableKinds.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
           {kind === 'vehicle' && (
@@ -174,8 +212,22 @@ export function MediaLibrary() {
               <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Marque<input value={make} onChange={(event) => setMake(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
               <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Modèle<input value={model} onChange={(event) => setModel(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
               <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Couleur<input value={color} onChange={(event) => setColor(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>
+              <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Vue de la photo<select value={angle} onChange={(event) => setAngle(event.target.value)} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2"><option>3/4 avant</option><option>Habitacle</option><option>Détail extérieur</option><option>Profil</option><option>Arrière</option></select></label>
             </>
           )}
+          {kind === 'vehicle' && isAdmin && <div className="w-full rounded-xl border border-[#e7e2da] bg-[#fbfaf8] p-4">
+            <p className="text-xs font-semibold text-[#253b4e]">Dossier véhicule</p>
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <label className="grid gap-1 text-xs font-semibold">Associer à<select value={selectedDossierId} onChange={(event) => setSelectedDossierId(event.target.value)} className="min-w-48 rounded-md border border-[#d2cec6] bg-white px-3 py-2"><option value="">Créer ou ajouter sans dossier</option>{vehicleFolders.map((folder) => <option key={folder.id} value={folder.id}>{folder.make} {folder.model}{folder.color ? ` · ${folder.color}` : ''}</option>)}</select></label>
+              <label className="grid gap-1 text-xs font-semibold">Type de photo<select value={photoRole} onChange={(event) => setPhotoRole(event.target.value as typeof photoRole)} className="rounded-md border border-[#d2cec6] bg-white px-3 py-2"><option value="exterior">Extérieur</option><option value="interior">Intérieur</option><option value="detail">Détail</option></select></label>
+              <label className="grid gap-1 text-xs font-semibold">Marque<input value={dossierMake} onChange={(event) => setDossierMake(event.target.value)} placeholder="Ex. Haval" className="w-32 rounded-md border border-[#d2cec6] bg-white px-3 py-2" /></label>
+              <label className="grid gap-1 text-xs font-semibold">Modèle<input value={dossierModel} onChange={(event) => setDossierModel(event.target.value)} placeholder="Ex. H6" className="w-32 rounded-md border border-[#d2cec6] bg-white px-3 py-2" /></label>
+              <label className="grid gap-1 text-xs font-semibold">Couleur<input value={dossierColor} onChange={(event) => setDossierColor(event.target.value)} placeholder="Facultatif" className="w-32 rounded-md border border-[#d2cec6] bg-white px-3 py-2" /></label>
+              <button type="button" disabled={busy || !dossierMake.trim() || !dossierModel.trim()} onClick={() => void createVehicleFolder()} className="rounded-md border border-[#c51e1c] px-3 py-2 text-xs font-semibold text-[#b21c1a] disabled:opacity-50">Créer le dossier</button>
+            </div>
+            <p className="mt-2 text-[10px] text-[#88847d]">Créez une fiche une fois, puis rattachez-lui chaque photo validée de l’intérieur, de l’extérieur ou des détails.</p>
+          </div>}
+          {kind === 'place' && isAdmin && <label className="grid gap-1 text-xs font-semibold text-[#253b4e]">Nom du lieu<input value={placeTitle} onChange={(event) => setPlaceTitle(event.target.value)} maxLength={160} placeholder="Ex. Plateau, Abidjan" className="min-w-56 rounded-md border border-[#d2cec6] bg-[#fbfbfa] px-3 py-2" /></label>}
         </div>
         <label className="cursor-pointer rounded-md bg-[#c51e1c] px-4 py-3 text-xs font-semibold text-white hover:bg-[#a71715] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2">
           {busy ? 'Téléversement…' : 'Ajouter un média'}
@@ -201,13 +253,19 @@ export function MediaLibrary() {
         <EmptyState onFile={(file) => void upload(file)} kind={kind} />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {filtered.map((asset) => (
-            <article key={asset.id} className="overflow-hidden rounded-2xl border border-black/[.055] bg-white">
+          {visibleAssets.map((asset, index) => {
+            const groupName = `${asset.make ?? 'Véhicule'} ${asset.model ?? ''}`.trim();
+            const previous = visibleAssets[index - 1];
+            const beginsVehicleGroup = filter === 'vehicle' && (!previous || `${previous.make ?? 'Véhicule'} ${previous.model ?? ''}`.trim() !== groupName);
+            return (
+            <Fragment key={asset.id}>
+            {beginsVehicleGroup && <h2 className="col-span-full mt-3 border-b border-[#e8e4de] pb-2 text-sm font-semibold text-[#253b4e]">{groupName}<span className="ml-2 text-xs font-normal text-[#918c85]">{visibleAssets.filter((item) => item.make === asset.make && item.model === asset.model).length} photo(s)</span></h2>}
+            <article className="overflow-hidden rounded-2xl border border-black/[.055] bg-white">
               <AssetPreview asset={asset} />
               <div className="p-4">
                 <p className="text-[9px] font-bold uppercase tracking-[.18em] text-[#ad3d34]">{labelForKind(asset.kind)}</p>
                 <h3 className="mt-1.5 text-sm font-semibold">{asset.kind === 'vehicle' ? `${asset.make ?? 'Véhicule'} ${asset.model ?? ''}` : asset.title ?? labelForKind(asset.kind)}</h3>
-                <p className="mt-1 text-xs text-[#918c85]">{asset.category ?? asset.color ?? asset.angle ?? asset.variant ?? 'RIMCO Motors'}</p>
+                <p className="mt-1 text-xs text-[#918c85]">{asset.kind === 'vehicle' ? [asset.angle, asset.color].filter(Boolean).join(' · ') || 'RIMCO Motors' : asset.category ?? asset.color ?? asset.variant ?? 'RIMCO Motors'}</p>
                 {asset.status === 'rejetée' && asset.review_reason && <p className="mt-2 text-xs text-[#831810]">Motif : {asset.review_reason}</p>}
                 {isAdmin && asset.status === 'en_attente' && (
                   <ReviewControls
@@ -221,7 +279,8 @@ export function MediaLibrary() {
                 )}
               </div>
             </article>
-          ))}
+            </Fragment>
+          );})}
         </div>
       )}
     </div>

@@ -4,9 +4,19 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
-import { makeFinalVideoArgs, makeShotMontageArgs, shouldOverlayLogo } from './ffmpeg-args';
+import { makeFinalVideoArgs, makeMultiClipMontageArgs, makeShotMontageArgs, shouldOverlayLogo } from './ffmpeg-args';
 
 describe('FFmpeg final video arguments', () => {
+  it('joins a variable number of generated clips and reserves a separate animated two-second logo card', () => {
+    const args = makeMultiClipMontageArgs({ shotFiles: ['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4'], shotDurations: [5, 4, 4], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', finalDurationSeconds: 15 });
+    expect(args.filter((value) => value.endsWith('.mp4'))).toEqual(['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4', '/tmp/final.mp4']);
+    expect(args.join(' ')).toContain('concat=n=3');
+    expect(args.join(' ')).toContain('d=2');
+    expect(args.join(' ')).toContain('fade=t=in');
+    expect(args.join(' ')).toContain('min(t/0.6,1)');
+    expect(args).toContain('15');
+  });
+
   it('overlays the RIMCO logo at the upper left and keeps the requested duration', () => {
     const args = makeFinalVideoArgs({ rawFile: '/tmp/raw.mp4', logoFile: '/app/public/brand/logo-rimco.png', outputFile: '/tmp/final.mp4', durationSeconds: 15, overlayLogo: true, audioFile: null, format: '9:16' });
     expect(args).toContain('/app/public/brand/logo-rimco.png');
@@ -66,6 +76,28 @@ describe('logo preference persistence', () => {
 });
 
 describe('FFmpeg logo rendering', () => {
+  it('assembles a variable-length storyboard and renders a separate two-second animated end card', async () => {
+    const executable = ffmpegPath;
+    if (!executable) throw new Error('Le binaire FFmpeg de test est indisponible.');
+    const directory = await mkdtemp(join(tmpdir(), 'rimco-multiclip-test-'));
+    const clip = join(directory, 'clip.mp4');
+    const output = join(directory, 'final.mp4');
+    const run = (args: string[]) => {
+      const result = spawnSync(executable, args, { encoding: 'utf8', timeout: 60_000 });
+      if (result.status !== 0) throw new Error(result.stderr || 'FFmpeg a échoué pendant le test multi-clips.');
+      return result;
+    };
+    try {
+      run(['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x334455:s=320x180:r=24:d=7', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clip]);
+      run(makeMultiClipMontageArgs({ shotFiles: [clip, clip], shotDurations: [7, 6], logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: output, finalDurationSeconds: 15, format: '16:9' }));
+      expect((await stat(output)).size).toBeGreaterThan(0);
+      const probe = run(['-hide_banner', '-i', output, '-f', 'null', '-']);
+      expect(`${probe.stderr}`).toContain('Duration: 00:00:15.00');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   it('renders all supported aspect ratios with and without the logo, preserving optional audio', async () => {
     const executable = ffmpegPath;
     if (!executable) throw new Error('Le binaire FFmpeg de test est indisponible.');

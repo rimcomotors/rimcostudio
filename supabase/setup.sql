@@ -626,3 +626,68 @@ update public.ai_models set is_active=true,is_default=false,tier='standard',allo
 update public.ai_models set is_active=true,is_default=true,tier='standard',allowed_durations='{10,15}',allowed_formats='{16:9,9:16,1:1}' where fal_endpoint_id='fal-ai/kling-video/o3/pro/image-to-video';
 update public.ai_models set is_active=true,is_default=true,tier='premium',allowed_durations='{6}',allowed_formats='{16:9,9:16}' where fal_endpoint_id='fal-ai/veo3.1/fast/image-to-video';
 update public.ai_models set is_active=true,is_default=false,tier='premium',allowed_durations='{10,15,20,30}',allowed_formats='{16:9,9:16,1:1}' where fal_endpoint_id='bytedance/seedance-2.5/image-to-video';
+
+-- 0018_vehicle_dossiers_places_admin.sql: explicit vehicle folders and photo roles.
+create table if not exists public.vehicle_dossiers (
+  id uuid primary key default gen_random_uuid(),
+  brand_id uuid not null references public.brands(id) on delete cascade,
+  make text not null check (length(trim(make)) between 1 and 100),
+  model text not null check (length(trim(model)) between 1 and 100),
+  color text,
+  variant text,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+alter table public.assets add column if not exists vehicle_dossier_id uuid references public.vehicle_dossiers(id) on delete set null;
+alter table public.assets add column if not exists photo_role text;
+alter table public.assets drop constraint if exists assets_photo_role_check;
+alter table public.assets add constraint assets_photo_role_check check (photo_role is null or photo_role in ('exterior','interior','detail'));
+create index if not exists vehicle_dossiers_brand_created_idx on public.vehicle_dossiers(brand_id, created_at desc);
+create index if not exists assets_vehicle_dossier_idx on public.assets(vehicle_dossier_id) where vehicle_dossier_id is not null;
+alter table public.vehicle_dossiers enable row level security;
+drop policy if exists vehicle_dossiers_read_brand on public.vehicle_dossiers;
+create policy vehicle_dossiers_read_brand on public.vehicle_dossiers for select to authenticated
+  using (public.is_admin() or exists (select 1 from public.profiles p where p.id=auth.uid() and p.is_active and p.brand_id=vehicle_dossiers.brand_id));
+drop policy if exists vehicle_dossiers_admin_manage on public.vehicle_dossiers;
+create policy vehicle_dossiers_admin_manage on public.vehicle_dossiers for all to authenticated
+  using (public.is_admin()) with check (public.is_admin());
+drop policy if exists assets_insert_self on public.assets;
+create policy assets_insert_self on public.assets for insert to authenticated
+  with check (created_by=auth.uid() and status='en_attente' and kind <> 'place');
+notify pgrst, 'reload schema';
+
+-- Migration 0019 : storyboard et montage multi-clips (idempotent).
+alter table public.video_shots drop constraint if exists video_shots_shot_number_check;
+alter table public.video_shots add constraint video_shots_shot_number_check check (shot_number between 1 and 6);
+alter table public.video_shots drop constraint if exists video_shots_duration_seconds_check;
+alter table public.video_shots add constraint video_shots_duration_seconds_check check (duration_seconds between 2 and 30);
+insert into public.ai_models(name,tier,fal_endpoint_id,adapter_family,mode,price_usd_per_second,allowed_durations,allowed_formats,is_active,is_default)
+values
+  ('Wan 2.7 Reference to Video','standard','fal-ai/wan/v2.7/reference-to-video','wan','image_to_video',0.10,'{2,3,4,5,6,7,8,9,10}','{16:9,9:16,1:1,4:3,3:4}',true,false),
+  ('Kling O3 Pro Reference to Video','standard','fal-ai/kling-video/o3/pro/reference-to-video','kling','image_to_video',0.112,'{3,4,5,6,7,8,9,10,11,12,13,14,15}','{16:9,9:16,1:1}',true,false),
+  ('Seedance 2.5 Reference to Video','premium','bytedance/seedance-2.5/reference-to-video','seedance','image_to_video',0.473,'{4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30}','{16:9,9:16,1:1,4:3,3:4,21:9}',true,false)
+on conflict(name) do update set tier=excluded.tier,fal_endpoint_id=excluded.fal_endpoint_id,
+  adapter_family=excluded.adapter_family,mode=excluded.mode,price_usd_per_second=excluded.price_usd_per_second,
+  allowed_durations=excluded.allowed_durations,allowed_formats=excluded.allowed_formats,is_active=excluded.is_active,is_default=false;
+notify pgrst, 'reload schema';
+
+-- 0020_storyboard_cost_guardrails.sql
+alter table public.ai_models add column if not exists pricing_verified_at timestamptz;
+alter table public.video_shots add column if not exists price_usd_per_second numeric(12,6);
+alter table public.video_shots add column if not exists estimated_cost_usd numeric(12,6);
+alter table public.video_shots add column if not exists actual_cost_usd numeric(12,6);
+create or replace function public.reserve_storyboard_comparison_budget(p_campaign_id uuid,p_amount_usd numeric,p_max_usd numeric)
+returns numeric language plpgsql security definer set search_path=public as $$
+declare current_brief jsonb; current_reserved numeric; next_reserved numeric; old_durations jsonb;
+begin
+  if p_amount_usd<=0 or p_max_usd<=0 then raise exception 'Invalid storyboard budget amount'; end if;
+  select brief_json into current_brief from public.comparisons where id=p_campaign_id for update;
+  if current_brief is null or current_brief->>'kind'<>'storyboard_multiclip_comparison' then raise exception 'Storyboard comparison campaign not found'; end if;
+  current_reserved:=coalesce((current_brief->>'reservedUsd')::numeric,0); next_reserved:=current_reserved+p_amount_usd;
+  if next_reserved>p_max_usd then return null; end if;
+  old_durations:=coalesce(current_brief->'durations','[]'::jsonb);
+  update public.comparisons set brief_json=current_brief||jsonb_build_object('reservedUsd',next_reserved,'durations',old_durations,'budgetUpdatedAt',now()) where id=p_campaign_id;
+  return next_reserved;
+end; $$;
+revoke all on function public.reserve_storyboard_comparison_budget(uuid,numeric,numeric) from public,anon,authenticated;
+grant execute on function public.reserve_storyboard_comparison_budget(uuid,numeric,numeric) to service_role;
