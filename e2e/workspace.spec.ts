@@ -57,7 +57,7 @@ if (mockWithoutSupabase) {
   test('connexion administrateur puis accès au studio de création', async ({ page }) => {
     await signIn(page, adminEmail, adminPassword);
     await expect(page).toHaveURL('/');
-    await expect(page.getByRole('heading', { name: 'De la demande au MP4, en quelques minutes' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^Bonjour / })).toBeVisible();
     await page.getByRole('link', { name: 'Créer une vidéo' }).click();
     await expect(page.getByRole('heading', { name: 'Créer une vidéo' })).toBeVisible();
     await expect(page.getByText('1. Choisissez le véhicule')).toBeVisible();
