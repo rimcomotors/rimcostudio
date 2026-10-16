@@ -2,7 +2,7 @@ import type { Actor } from '@/core/auth/guards';
 import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
-import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
+import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
 import { klingVideoProvider } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { createSupabaseServerClient } from '@/core/supabase/server';
@@ -86,7 +86,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   });
   const prompts = generationShots.map((shot, index) => {
     const reference = vehiclePhotos.find((photo) => photo.id === shot.vehiclePhotoId);
-    return shotToPrompt(brief, shot, index, generationShots.length, route.adapterFamily === 'seedance' ? '[' : '@', {
+    return shotToPrompt(brief, shot, index, generationShots.length, '@', {
       role: reference?.photo_role,
       angle: reference?.angle,
     });
@@ -182,22 +182,26 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     return provider.submit({ prompt: prompts[index], referenceImageUrls: refs, durationS: shot.durationSeconds, aspectRatio: input.format, endUserId: actor.id });
   }));
   let submitted = 0;
+  const submissionErrors: string[] = [];
   for (let index = 0; index < submissions.length; index += 1) {
     const submission = submissions[index];
     if (submission.status === 'fulfilled') {
       submitted += 1;
       await admin.from('video_shots').update({ provider_request_id: submission.value.requestId, status: 'generating', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
     } else {
-      await admin.from('video_shots').update({ status: 'failed', error_message: 'Impossible de démarrer ce plan auprès du fournisseur.', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
+      const detail = safeProviderError(submission.reason);
+      submissionErrors.push(detail);
+      await admin.from('video_shots').update({ status: 'failed', error_message: detail, updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
     }
   }
   if (!submitted) {
+    const detail = submissionErrors[0] ?? 'Erreur fournisseur sans détail exploitable.';
     await Promise.all([
       settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
-      admin.from('video_versions').update({ status: 'failed', error_message: 'Aucun plan n’a pu démarrer.' }).eq('id', version.id),
+      admin.from('video_versions').update({ status: 'failed', error_message: `Aucun plan n’a pu démarrer. ${detail}` }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
-    throw new HttpError(503, 'Aucun plan n’a pu démarrer. La réservation a été libérée.');
+    throw new HttpError(503, `Aucun plan n’a pu démarrer. La réservation a été libérée. Détail fournisseur : ${detail}`);
   }
   await admin.from('video_versions').update({ status: 'generating', updated_at: new Date().toISOString() }).eq('id', version.id);
   const totalEstimatedPriceFcfa = calculateClientPriceFcfa(costUsd + storyboardCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);

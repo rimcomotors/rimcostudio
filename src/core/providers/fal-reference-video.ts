@@ -24,6 +24,18 @@ export type ReferenceVideoProvider = {
   status(requestId: string): Promise<{ status: ProviderStatus; videoUrl?: string; error?: string }>;
 };
 
+/** Keep actionable provider errors while removing URLs and credential-like values. */
+export function safeProviderError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  const safe = raw
+    .replace(/https?:\/\/\S+/gi, '[URL masquée]')
+    .replace(/\b(key|token|authorization|bearer)\s*[:=]\s*[^\s,;]+/gi, '$1=[masqué]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 300);
+  return safe || 'Erreur fournisseur sans détail exploitable.';
+}
+
 function client() {
   if (!env.FAL_KEY) throw new Error('FAL_KEY manque : configurez la clé fal.ai dans Vercel.');
   return createFalClient({ credentials: env.FAL_KEY });
@@ -122,7 +134,7 @@ export const seedanceReferenceVideoProvider: ReferenceVideoProvider = {
     if (!input.endUserId) throw new Error('Seedance 2.5 nécessite l’identifiant de l’utilisateur final.');
     if (!['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].includes(input.aspectRatio)) throw new Error('Format non pris en charge par Seedance 2.5.');
     const result = await client().queue.submit(SEEDANCE_REFERENCE_ENDPOINT, { input: {
-      prompt: promptWithImageReferences(input.prompt, input.referenceImageUrls.length, '['),
+      prompt: promptWithImageReferences(input.prompt, input.referenceImageUrls.length),
       image_urls: input.referenceImageUrls,
       duration: String(input.durationS),
       aspect_ratio: input.aspectRatio,

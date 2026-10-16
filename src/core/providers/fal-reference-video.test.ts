@@ -33,9 +33,15 @@ describe('fal Reference-to-Video adapters', () => {
     const { seedanceReferenceVideoProvider, SEEDANCE_REFERENCE_ENDPOINT } = await import('./fal-reference-video');
     await seedanceReferenceVideoProvider.submit({ ...input, endUserId: 'user-1' });
     expect(mockSubmit).toHaveBeenCalledWith(SEEDANCE_REFERENCE_ENDPOINT, { input: {
-      prompt: expect.stringContaining('[Image1], [Image2]'), image_urls: input.referenceImageUrls,
+      prompt: expect.stringContaining('@Image1, @Image2'), image_urls: input.referenceImageUrls,
       duration: '5', aspect_ratio: '16:9', resolution: '720p', generate_audio: false, end_user_id: 'user-1',
     } });
+  });
+
+  it('keeps useful provider error details while masking URLs and credential-like values', async () => {
+    const { safeProviderError } = await import('./fal-reference-video');
+    expect(safeProviderError(new Error('Invalid reference https://assets.example/private.jpg bearer: secret-token')))
+      .toBe('Invalid reference [URL masquée] bearer=[masqué]');
   });
 
   it('rejects unsupported clip lengths, ratios, and too many Kling reference images before queue submission', async () => {
