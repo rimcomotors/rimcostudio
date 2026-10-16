@@ -16,6 +16,18 @@ type StoryShot = { title: string; scene: string; framing: string; location: stri
 type ComparisonJob = { mode: 'standard' | 'pro'; id?: string; status: string; completedShots?: number; totalShots?: number; error?: string };
 const durationOptions = [5, 10, 15, 20];
 const lightOptions = ['Lumière naturelle claire du matin'];
+
+function getLightingLabel(lighting: string): string {
+  const normalized = lighting.toLocaleLowerCase('fr');
+  if (normalized.includes('lever du jour')) return 'Lever du jour';
+  if (normalized.includes('fin de journée')) return 'Fin de journée';
+  if (normalized.includes('nuit')) return 'Nuit';
+  if (normalized.includes('soirée')) return 'Soirée';
+  if (normalized.includes('intérieur')) return 'Intérieur';
+  if (normalized.includes('matin')) return 'Matin';
+  return lighting;
+}
+
 const characterOptions = [
   { value: '', label: 'Sans personnage · recommandé pour le premier test' },
   { value: 'Une conductrice ou un conducteur naturel, visible à travers la vitre', label: 'Conductrice ou conducteur' },
@@ -123,7 +135,8 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
     : selectedModel;
   const estimatedPriceFcfa = storyboardModel?.estimatedPricesFcfa[String(durationS)];
   const generationActive = Boolean(job && !['ready', 'failed'].includes(job.status));
-  const lightingChoices = Array.from(new Map(sceneChoices.map((scene) => [scene.lighting, scene])).values());
+  const lightingChoices = Array.from(new Map(sceneChoices.map((scene) => [getLightingLabel(scene.lighting), scene])).entries())
+    .map(([label, scene]) => ({ label, scene }));
 
   function clearFormError() {
     setError('');
@@ -309,7 +322,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
           <div className="space-y-4">
             <fieldset><legend className="mb-2 text-[11px] font-semibold">Personnage</legend><div className="flex flex-wrap gap-1.5">{characterOptions.map((option) => <button type="button" key={option.value || 'none'} onClick={() => setCharacter(option.value)} aria-pressed={character === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${character === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{option.value ? option.label.replace('Une ', '') : 'Aucun'}</button>)}</div></fieldset>
-            <fieldset><legend className="mb-2 text-[11px] font-semibold">Lumière</legend><div className="flex flex-wrap gap-1.5">{lightingChoices.map((scene) => <button type="button" key={scene.lighting} onClick={() => setScenePresetId(scene.id)} aria-pressed={scene.lighting === selectedScene?.lighting} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${scene.lighting === selectedScene?.lighting ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{scene.lighting.includes('fin de journée') ? 'Fin de journée' : scene.lighting.includes('Nuit') || scene.lighting.includes('nuit') ? 'Nuit' : 'Matin'}</button>)}</div></fieldset>
+            <fieldset><legend className="mb-2 text-[11px] font-semibold">Lumière</legend><div className="flex flex-wrap gap-1.5">{lightingChoices.map(({ label, scene }) => <button type="button" key={label} onClick={() => setScenePresetId(scene.id)} aria-pressed={label === getLightingLabel(selectedScene?.lighting ?? '')} className={`rounded-full border px-2.5 py-1.5 text-[10px] transition ${label === getLightingLabel(selectedScene?.lighting ?? '') ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d] hover:border-[#c51e1c]'}`}>{label}</button>)}</div></fieldset>
           </div>
         </section>
 
