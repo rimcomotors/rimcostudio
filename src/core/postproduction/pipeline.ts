@@ -115,12 +115,13 @@ export async function assembleShotMontage(versionId: string) {
     .eq('version_id', versionId).order('shot_number');
   const brief = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
   const isMultiClip = brief.multiClipMode === true;
-  if (shotsError || !shots || (isMultiClip ? shots.length < 2 || shots.length > 6 : shots.length !== 2) || shots.some((shot) => shot.status !== 'ready' || !shot.raw_path)) {
+  const isStoryboard = isMultiClip || brief.singleStoryboardMode === true;
+  if (shotsError || !shots || (isMultiClip ? shots.length < 2 || shots.length > 6 : isStoryboard ? shots.length < 1 || shots.length > 6 : shots.length !== 2) || shots.some((shot) => shot.status !== 'ready' || !shot.raw_path)) {
     throw new HttpError(409, 'Tous les plans doivent être prêts avant leur assemblage.');
   }
   const overlayLogo = shouldOverlayLogo(version.brief_json);
   const briefFormat = normalizeVideoFormat(version.brief_json && typeof version.brief_json === 'object' ? (version.brief_json as { format?: unknown }).format : undefined);
-  if (overlayLogo || isMultiClip) {
+  if (overlayLogo || isStoryboard) {
     try { await access(logoFile, constants.R_OK); }
     catch { throw new HttpError(503, 'Le logo RIMCO est indisponible sur ce déploiement.'); }
   }
@@ -134,8 +135,8 @@ export async function assembleShotMontage(versionId: string) {
   const outputFile = join(directory, 'montage.mp4');
   try {
     await Promise.all(clipFiles.map((path, index) => writeFile(path, clipBytes[index])));
-    const args = isMultiClip
-      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: shots.map((shot) => Number(shot.duration_seconds)), logoFile, outputFile, finalDurationSeconds: Number(brief.finalDurationSeconds) as 15 | 20, format: briefFormat })
+    const args = isStoryboard
+      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: shots.map((shot) => Number(shot.duration_seconds)), logoFile, outputFile, finalDurationSeconds: Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: brief.clipDurationSeconds as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
       : makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6, format: briefFormat });
     await runFfmpeg(ffmpegPath, args);
     const outputStat = await stat(outputFile);

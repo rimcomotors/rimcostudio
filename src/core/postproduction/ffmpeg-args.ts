@@ -22,7 +22,9 @@ type MultiClipMontageArgs = {
   shotDurations: number[];
   logoFile: string;
   outputFile: string;
-  finalDurationSeconds: 15 | 20;
+  finalDurationSeconds: number;
+  clipDurationSeconds?: 5 | 10 | 15 | 20;
+  singleStoryboardMode?: boolean;
   format?: VideoFormat;
 };
 
@@ -88,17 +90,21 @@ export function makeShotMontageArgs(input: MontageArgs) {
 
 /** Assemble generated footage, then append a distinct two-second animated brand end card. */
 export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
-  if (input.shotFiles.length < 2 || input.shotFiles.length !== input.shotDurations.length) throw new Error('Le montage doit contenir au moins deux plans avec leurs durées.');
-  if (input.finalDurationSeconds !== 15 && input.finalDurationSeconds !== 20) throw new Error('La durée finale doit être de 15 ou 20 secondes.');
+  if (input.shotFiles.length < (input.singleStoryboardMode ? 1 : 2) || input.shotFiles.length !== input.shotDurations.length) throw new Error('Le montage ne contient pas le nombre attendu de plans.');
   const clipSeconds = input.shotDurations.reduce((sum, seconds) => sum + seconds, 0);
-  if (clipSeconds !== input.finalDurationSeconds - 2 || input.shotDurations.some((seconds) => !Number.isInteger(seconds) || seconds <= 0)) throw new Error('Les plans doivent laisser exactement deux secondes au logo final.');
+  const hasNewDurationContract = input.clipDurationSeconds !== undefined;
+  if (hasNewDurationContract && (![7, 12, 17, 22].includes(input.finalDurationSeconds) || input.finalDurationSeconds !== input.clipDurationSeconds! + 2)) throw new Error('La vidéo finale doit ajouter exactement deux secondes au logo.');
+  if (!hasNewDurationContract && ![5, 10, 15, 20, 30].includes(input.finalDurationSeconds)) throw new Error('La durée enregistrée n’est pas prise en charge.');
+  const footageSeconds = input.clipDurationSeconds ?? input.finalDurationSeconds - 2;
+  if ((input.singleStoryboardMode ? clipSeconds < footageSeconds : clipSeconds !== footageSeconds) || input.shotDurations.some((seconds) => !Number.isInteger(seconds) || seconds <= 0)) throw new Error('Les plans doivent laisser exactement deux secondes au logo final.');
   const format = normalizeVideoFormat(input.format);
   const [width, height] = OUTPUT_DIMENSIONS[format];
   const args = ['-hide_banner', '-loglevel', 'error', '-y'];
   input.shotFiles.forEach((file) => args.push('-i', file));
   args.push('-loop', '1', '-i', input.logoFile);
   const filters = input.shotFiles.map((_, index) => `[${index}:v:0]setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${input.shotDurations[index]},trim=duration=${input.shotDurations[index]},scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},setsar=1[v${index}]`);
-  filters.push(`${input.shotFiles.map((_, index) => `[v${index}]`).join('')}concat=n=${input.shotFiles.length}:v=1:a=0[footage]`);
+  filters.push(`${input.shotFiles.map((_, index) => `[v${index}]`).join('')}concat=n=${input.shotFiles.length}:v=1:a=0[footage_all]`);
+  filters.push(`[footage_all]trim=duration=${footageSeconds},setpts=PTS-STARTPTS[footage]`);
   filters.push(`color=c=white:s=${width}x${height}:r=30:d=2[card];[${input.shotFiles.length}:v:0]format=rgba,scale=w='iw*(0.9+0.1*min(t/0.6,1))':h=-1:eval=frame[logo];[card][logo]overlay=(W-w)/2:(H-h)/2:format=auto,fade=t=in:st=0:d=0.45,fade=t=out:st=1.55:d=0.45[brand]`);
   filters.push('[footage][brand]concat=n=2:v=1:a=0[vout]');
   args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-t', String(input.finalDurationSeconds), input.outputFile);

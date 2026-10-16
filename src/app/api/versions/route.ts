@@ -15,7 +15,7 @@ import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
 import { deleteVersionsByVideoIds } from '@/core/versions/store';
 import { aggregateGenerationCost } from '@/core/billing/aggregate';
-import { storyboardSchema, validateStoryboard } from '@/core/storyboard';
+import { singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
 import { createLiveStoryboard } from '@/core/versions/storyboard-live';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 
@@ -23,12 +23,22 @@ const deleteSchema = z.object({ videoIds: z.array(z.string().uuid()).min(1).max(
 const multiClipSchema = requestSchema.extend({
   workflow: z.literal('multi_clip'),
   storyMode: z.enum(['standard', 'pro', 'premium']),
-  finalDurationSeconds: z.union([z.literal(15), z.literal(20)]),
+  clipDurationSeconds: z.union([z.literal(15), z.literal(20)]),
   purpose: z.enum(['presentation', 'advertising']),
   vehicleDossierId: z.string().uuid(),
   placeIds: z.array(z.string().uuid()).max(12).default([]),
   storyboardLedgerIds: z.array(z.string().uuid()).max(20).default([]),
   storyboard: storyboardSchema,
+}).strict();
+const singleStoryboardSchema = requestSchema.extend({
+  workflow: z.literal('single_storyboard'),
+  storyMode: z.enum(['standard', 'pro', 'premium']),
+  clipDurationSeconds: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
+  purpose: z.enum(['presentation', 'advertising']),
+  vehicleDossierId: z.string().uuid(),
+  placeIds: z.array(z.string().uuid()).max(12).default([]),
+  storyboardLedgerIds: z.array(z.string().uuid()).max(20).default([]),
+  storyboard: singleShotStoryboardSchema,
 }).strict();
 
 export async function GET(request: Request) {
@@ -103,9 +113,19 @@ export async function POST(request: Request) {
   try {
     const actor = await getActor();
     const payload = await request.json();
+    if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'single_storyboard') {
+      const single = singleStoryboardSchema.parse(payload);
+      validateSingleShotStoryboard(single.storyboard, single.clipDurationSeconds, getStoryboardModeRoute(single.storyMode).adapterFamily);
+      if (single.tier !== single.storyMode) throw new HttpError(422, 'Le mode de génération doit correspondre au storyboard validé.');
+      if (single.format !== '16:9' || single.audioAssetId) throw new HttpError(422, 'Le storyboard utilise le format horizontal 16:9, sans audio.');
+      if (env.PROVIDERS_MODE === 'mock') {
+        return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du storyboard IA à un seul plan.', completedShots: 1, totalShots: 1, estimatedPriceFcfa: 0 }, { status: 201 });
+      }
+      return NextResponse.json(await createLiveStoryboard(actor, { ...single, workflow: 'single' }), { status: 201 });
+    }
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'multi_clip') {
       const multi = multiClipSchema.parse(payload);
-      validateStoryboard(multi.storyboard, multi.finalDurationSeconds, getStoryboardModeRoute(multi.storyMode).adapterFamily);
+      validateStoryboard(multi.storyboard, multi.clipDurationSeconds, getStoryboardModeRoute(multi.storyMode).adapterFamily);
       if (multi.format !== '16:9' || multi.audioAssetId) throw new HttpError(422, 'Le storyboard multi-plans utilise le format horizontal 16:9, sans audio.');
       if (env.PROVIDERS_MODE === 'mock') {
         return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du storyboard multi-plans.', completedShots: multi.storyboard.length, totalShots: multi.storyboard.length, estimatedPriceFcfa: 0 }, { status: 201 });

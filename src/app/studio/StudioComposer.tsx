@@ -5,7 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { formatFcfa } from '@/core/pricing';
 import { getScenePresets, getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
-import { getRouteForGeneration, getRoutedDurations } from '@/core/providers/model-routing';
+import { getRouteForGeneration } from '@/core/providers/model-routing';
 
 type Format = '16:9' | '9:16' | '1:1' | '4:5';
 type Job = { id: string; status: string; error?: string; prompt?: string; completedShots?: number; totalShots?: number };
@@ -30,7 +30,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [assetsRetry, setAssetsRetry] = useState(0);
   const [assetId, setAssetId] = useState('');
   const [title, setTitle] = useState('');
-  const [overlayLogo, setOverlayLogo] = useState(true);
+  const [overlayLogo] = useState(true);
   const [scenePresetId, setScenePresetId] = useState('');
   const conceptId = 'signature';
   const complexity = 'balanced';
@@ -44,7 +44,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [busy, setBusy] = useState(false);
   const [multiClip, setMultiClip] = useState(false);
   const [storyMode, setStoryMode] = useState<'standard' | 'pro' | 'premium'>('standard');
-  const [finalDurationSeconds, setFinalDurationSeconds] = useState<15 | 20>(15);
+  const [clipDurationSeconds, setClipDurationSeconds] = useState<15 | 20>(15);
   const [purpose, setPurpose] = useState<'presentation' | 'advertising'>('presentation');
   const [vehicleDossiers, setVehicleDossiers] = useState<VehicleDossier[]>([]);
   const [places, setPlaces] = useState<PlaceAsset[]>([]);
@@ -72,13 +72,13 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const compatibleModels = availableModels.filter((model) => model.tier === tier && !model.isReference);
   const route = getRouteForGeneration(tier, durationS);
   const routedModel = compatibleModels.find((model) => model.adapterFamily === route?.adapterFamily && model.durations.includes(durationS));
-  const singleReferenceMode = !multiClip && Boolean(selectedDossier && (selectedDossier.photos.length > 1 || locationAssetId));
+  const singleReferenceMode = !multiClip;
   const selectedModel = singleReferenceMode
     ? availableModels.find((model) => model.tier === tier && model.isReference)
     : routedModel;
   const estimatedPrice = selectedModel?.estimatedPricesFcfa?.[String(durationS)];
   const priceLabel = mode === 'live' && estimatedPrice ? `≈ ${formatFcfa(estimatedPrice)}` : mode === 'mock' ? 'Simulation' : '—';
-  const durationOptions = mode === 'mock' ? [5] : tier === 'premium' ? premiumDurationOptions : selectedModel?.durations ?? getRoutedDurations(tier);
+  const durationOptions = multiClip ? [15, 20] : premiumDurationOptions;
   const generationActive = Boolean(job && !['ready', 'failed'].includes(job.status));
   const lightingChoices = Array.from(new Map(sceneChoices.map((scene) => [scene.lighting, scene])).values());
 
@@ -87,7 +87,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   }, [selectedModel, format]);
 
   useEffect(() => {
-    const allowed = mode === 'mock' ? [5] : tier === 'premium' ? premiumDurationOptions : selectedModel?.durations ?? getRoutedDurations(tier);
+    const allowed = premiumDurationOptions;
     if (!allowed.includes(durationS)) setDurationS(allowed[0]);
   }, [durationS, mode, selectedModel, tier]);
 
@@ -186,18 +186,24 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         if (!firstPhoto) throw new Error('Ajoutez au moins une photo validée dans le dossier véhicule.');
         const response = await fetch('/api/versions', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ workflow: 'multi_clip', description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), placeIds, storyMode, finalDurationSeconds, purpose, storyboard, storyboardLedgerIds, format: '16:9', tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }),
+          body: JSON.stringify({ workflow: 'multi_clip', description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), placeIds, storyMode, clipDurationSeconds, purpose, storyboard, storyboardLedgerIds, format: '16:9', tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error ?? 'Le montage multi-plans n’a pas pu démarrer.');
         setJob({ id: data.id, status: data.status, prompt: data.prompt, completedShots: data.completedShots, totalShots: data.totalShots });
         return;
       }
+      if (!selectedDossier?.id || storyboard.length !== 1) throw new Error('Choisissez un véhicule puis générez et validez la proposition de storyboard IA.');
+      const firstPhoto = selectedDossier.photos.find((photo) => photo.id === storyboard[0].vehiclePhotoId) ?? selectedDossier.photos[0];
+      if (!firstPhoto) throw new Error('Ajoutez au moins une photo validée dans le dossier véhicule.');
       const response = await fetch('/api/versions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          description: additionalDirection, conceptId, title, assetId: selectedPhoto?.id ?? assetId, vehicleDossierId: selectedDossier?.id ?? null, vehicleDossierIds: selectedDossier?.dossierIds ?? [], vehiclePhotoIds: selectedDossier?.photos.map((photo) => photo.id) ?? [], locationAssetId: locationAssetId || null, character, format, tier, durationS, overlayLogo, complexity,
+          workflow: 'single_storyboard', storyMode: tier, clipDurationSeconds: durationS, purpose,
+          storyboard, storyboardLedgerIds,
+          description: additionalDirection, conceptId, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), locationAssetId: locationAssetId || null, character, format: '16:9', tier, durationS, overlayLogo, complexity,
+          placeIds: locationAssetId ? [locationAssetId] : [],
           scenePresetId: selectedScene?.id ?? '',
           vehicleCategory,
           location: selectedScene?.location ?? '', setting: selectedScene?.setting ?? '',
@@ -218,9 +224,9 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   }
 
   async function suggestStoryboard() {
-    setError(''); setStoryboardBusy(true); setStoryboard([]);
+    setError(''); setStoryboardBusy(true); setStoryboard([]); setStoryboardLedgerIds([]); setStoryboardCostFcfa(null); setMultiClipEstimatedPriceFcfa(null);
     try {
-      const response = await fetch('/api/storyboard/suggest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ vehicleDossierId, vehicleDossierIds: selectedDossier?.dossierIds ?? [vehicleDossierId], placeIds, mode: storyMode, durationSeconds: finalDurationSeconds, purpose, direction: additionalDirection }) });
+      const response = await fetch('/api/storyboard/suggest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workflow: multiClip ? 'multi_clip' : 'single', vehicleDossierId: selectedDossier?.id ?? vehicleDossierId, vehicleDossierIds: selectedDossier?.dossierIds ?? [selectedDossier?.id ?? vehicleDossierId], placeIds: multiClip ? placeIds : locationAssetId ? [locationAssetId] : [], mode: multiClip ? storyMode : tier, durationSeconds: multiClip ? clipDurationSeconds : durationS, purpose, direction: additionalDirection }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Le storyboard n’a pas pu être proposé.');
       setStoryboard(data.storyboard ?? []);
@@ -239,7 +245,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       if (!firstPhoto) throw new Error('Ajoutez une photo validée au dossier véhicule.');
       const response = await fetch('/api/storyboard/compare', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ campaignId: comparisonCampaignId || undefined, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], placeIds, finalDurationSeconds, purpose, storyboard, description: additionalDirection, title, assetId: firstPhoto.id, format: '16:9', tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }),
+        body: JSON.stringify({ campaignId: comparisonCampaignId || undefined, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], placeIds, clipDurationSeconds, purpose, storyboard, description: additionalDirection, title, assetId: firstPhoto.id, format: '16:9', tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Le comparatif n’a pas pu démarrer.');
@@ -273,17 +279,17 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       </div>
 
       <aside id="generation-options" className="min-w-0 space-y-3 xl:sticky xl:top-5">
-        {multiClip && <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-2 text-[11px] font-semibold">Mode · durée finale</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard · Wan' }, { value: 'pro', label: 'Pro · Kling' }, { value: 'premium', label: 'Premium · Seedance' }] as const).map((option) => <button type="button" key={option.value} onClick={() => setStoryMode(option.value)} aria-pressed={storyMode === option.value} className={`rounded-md border px-2 py-2 text-[10px] ${storyMode === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><div className="mt-2 flex gap-1.5">{([15, 20] as const).map((seconds) => <button type="button" key={seconds} onClick={() => { setFinalDurationSeconds(seconds); setStoryboard([]); }} aria-pressed={finalDurationSeconds === seconds} className={`flex-1 rounded-full border px-2.5 py-1.5 text-[10px] ${finalDurationSeconds === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s · logo inclus</button>)}</div></fieldset>
+        <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
+          {multiClip ? <fieldset><legend className="mb-2 text-[11px] font-semibold">Mode · durée des clips</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard · Wan' }, { value: 'pro', label: 'Pro · Kling' }, { value: 'premium', label: 'Premium · Seedance' }] as const).map((option) => <button type="button" key={option.value} onClick={() => setStoryMode(option.value)} aria-pressed={storyMode === option.value} className={`rounded-md border px-2 py-2 text-[10px] ${storyMode === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><div className="mt-2 flex gap-1.5">{([15, 20] as const).map((seconds) => <button type="button" key={seconds} onClick={() => { setClipDurationSeconds(seconds); setStoryboard([]); setMultiClipEstimatedPriceFcfa(null); }} aria-pressed={clipDurationSeconds === seconds} className={`flex-1 rounded-full border px-2.5 py-1.5 text-[10px] ${clipDurationSeconds === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s + 2 s logo = {seconds + 2} s</button>)}</div></fieldset> : <p className="text-[10px] text-[#77736d]">Storyboard en un plan · {tier === 'standard' ? 'Wan' : tier === 'pro' ? 'Kling' : 'Seedance'} · {durationS} s de clips + 2 s de logo = {durationS + 2} s</p>}
           <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Intention</legend><div className="flex gap-1.5">{([{ value: 'presentation', label: 'Présentation fidèle' }, { value: 'advertising', label: 'Publicité premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setPurpose(option.value); setStoryboard([]); }} aria-pressed={purpose === option.value} className={`flex-1 rounded-full border px-2 py-1.5 text-[10px] ${purpose === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div></fieldset>
-          <button type="button" disabled={storyboardBusy || !selectedDossier?.photos.length} onClick={() => void suggestStoryboard()} className="mt-4 w-full rounded-md border border-[#c51e1c] px-3 py-2.5 text-xs font-semibold text-[#b21c1a] disabled:opacity-50">{storyboardBusy ? 'L’IA imagine les plans…' : storyboard.length ? 'Régénérer le storyboard IA' : 'Proposer le storyboard IA'}</button>
-          {isAdmin && mode === 'live' && storyboard.length > 0 && <div className="mt-3 rounded-md border border-[#e8e4de] p-3"><button type="button" disabled={busy} onClick={() => void compareWanAndKling()} className="w-full rounded-md bg-[#253b4e] px-3 py-2.5 text-xs font-semibold text-white disabled:opacity-50">{busy ? 'Démarrage du comparatif…' : 'Comparer Wan et Kling avec ce storyboard'}</button><p className="mt-2 text-[9px] leading-4 text-[#88847d]">Même véhicule, lieux et storyboard. Campagne plafonnée à 10 USD; vous pouvez comparer 15 s puis 20 s si le budget restant suffit.</p>{comparisonJobs.length > 0 && <div className="mt-2 space-y-1">{comparisonJobs.map((item) => <p key={item.mode} className="text-[10px] text-[#716d66]">{item.mode === 'standard' ? 'Wan 2.7' : 'Kling O3'} · {item.status === 'ready' ? 'Prête' : item.status === 'failed' ? item.error ?? 'Échec' : `${item.completedShots ?? 0}/${item.totalShots ?? storyboard.length} plans`}</p>)}</div>}</div>}
+          <button type="button" disabled={storyboardBusy || !selectedDossier?.id || !selectedDossier.photos.length} onClick={() => void suggestStoryboard()} className="mt-4 w-full rounded-md border border-[#c51e1c] px-3 py-2.5 text-xs font-semibold text-[#b21c1a] disabled:opacity-50">{storyboardBusy ? 'L’IA imagine les plans…' : storyboard.length ? 'Régénérer le storyboard IA' : 'Proposer le storyboard IA'}</button>
+          {multiClip && isAdmin && mode === 'live' && storyboard.length > 0 && <div className="mt-3 rounded-md border border-[#e8e4de] p-3"><button type="button" disabled={busy} onClick={() => void compareWanAndKling()} className="w-full rounded-md bg-[#253b4e] px-3 py-2.5 text-xs font-semibold text-white disabled:opacity-50">{busy ? 'Démarrage du comparatif…' : 'Comparer Wan et Kling avec ce storyboard'}</button><p className="mt-2 text-[9px] leading-4 text-[#88847d]">Même véhicule, lieux et storyboard. Campagne plafonnée à 10 USD; vous pouvez comparer 15 s puis 20 s si le budget restant suffit.</p></div>}
           {error && <p role="alert" className="mt-3 rounded-md bg-red-50 p-3 text-xs text-red-700">{error}</p>}
-          {storyboard.length > 0 && <div className="mt-3 space-y-2">{storyboard.map((shot, index) => <article key={`${shot.title}-${index}`} className="rounded-md bg-[#f8f7f4] p-3"><div className="flex items-center justify-between gap-2 text-[10px] font-semibold"><span>Plan {index + 1} · {shot.title}</span><span>{shot.durationSeconds} s</span></div><p className="mt-1 text-[10px] leading-4 text-[#77736d]">{shot.scene} · {shot.location}<br />Cadrage : {shot.framing}<br />{shot.action}<br /><span className="text-[#a47731]">Caméra : {shot.camera}</span></p></article>)}<p className="text-[9px] text-[#88847d]">{finalDurationSeconds - 2} s de clips générés + 2 s de logo RIMCO animé.</p></div>}
-        </section>}
+          {storyboard.length > 0 && <div className="mt-3 space-y-2">{storyboard.map((shot, index) => <article key={`${shot.title}-${index}`} className="rounded-md bg-[#f8f7f4] p-3"><div className="flex items-center justify-between gap-2 text-[10px] font-semibold"><span>{multiClip ? `Plan ${index + 1}` : 'Plan proposé'} · {shot.title}</span><span>{shot.durationSeconds} s</span></div><p className="mt-1 text-[10px] leading-4 text-[#77736d]">{shot.scene} · {shot.location}<br />Cadrage : {shot.framing}<br />{shot.action}<br /><span className="text-[#a47731]">Caméra : {shot.camera}</span></p></article>)}<p className="text-[9px] text-[#88847d]">{multiClip ? clipDurationSeconds : durationS} s de clips générés + 2 s de logo RIMCO animé = { (multiClip ? clipDurationSeconds : durationS) + 2 } s au total.</p></div>}
+        </section>
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <label className="flex items-center justify-between gap-3 text-xs font-semibold"><span>Workflow multi-plans<small className="mt-1 block text-[10px] font-normal text-[#88847d]">Storyboard IA, clips assemblés et logo final</small></span><input type="checkbox" checked={multiClip} onChange={(event) => { const enabled = event.target.checked; setMultiClip(enabled); setJob(null); setError(''); if (enabled && locationAssetId) setPlaceIds((current) => current.includes(locationAssetId) ? current : [...current, locationAssetId]); if (!enabled) setLocationAssetId(placeIds[0] ?? ''); }} className="size-4 accent-[#c51e1c]" /></label>
+          <label className="flex items-center justify-between gap-3 text-xs font-semibold"><span>Workflow multi-plans<small className="mt-1 block text-[10px] font-normal text-[#88847d]">Storyboard IA, clips assemblés et logo final</small></span><input type="checkbox" checked={multiClip} onChange={(event) => { const enabled = event.target.checked; setMultiClip(enabled); setJob(null); setError(''); setStoryboard([]); setStoryboardLedgerIds([]); setStoryboardCostFcfa(null); setMultiClipEstimatedPriceFcfa(null); if (enabled && locationAssetId) setPlaceIds((current) => current.includes(locationAssetId) ? current : [...current, locationAssetId]); if (!enabled) setLocationAssetId(placeIds[0] ?? ''); }} className="size-4 accent-[#c51e1c]" /></label>
         </section>
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4 text-[#161619]">
           <div className="flex items-center justify-between gap-2"><h2 className="font-display text-sm font-semibold uppercase tracking-[.04em]">Votre vidéo</h2><span className="rounded-full bg-[#f2f1ef] px-2 py-1 text-[9px] text-[#88847d]">{title.trim() ? 'Prête à lancer' : 'Description à saisir'}</span></div>
@@ -306,18 +312,18 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         </section>}
 
         {!multiClip && <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(mode === 'live' ? selectedModel?.formats ?? ['16:9', '9:16'] : ['16:9', '9:16', '1:1', '4:5']).map((value) => <button type="button" key={value} onClick={() => setFormat(value as Format)} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
-          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Durée</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => setDurationS(seconds)} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div></fieldset>
-          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); setDurationS(5); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Standard · Wan, 5 s. Pro · Kling, 5 à 15 s. Premium · Veo/Seedance, jusqu’à 20 s.</p></fieldset>
-          <label className="mt-4 flex items-center justify-between gap-3 border-t border-[#eeeae4] pt-4 text-[11px] font-semibold"><span>Ajouter le logo RIMCO<small className="mt-1 block text-[10px] font-normal text-[#88847d]">Incrusté après la génération</small></span><input type="checkbox" checked={overlayLogo} onChange={(event) => setOverlayLogo(event.target.checked)} className="size-4 accent-[#c51e1c]" /></label>
-          {mode === 'live' && <div className="mt-4 rounded-md bg-[#f8f7f4] px-3 py-2.5 text-[10px] text-[#716d66]">{modelsLoading ? <p role="status">Chargement des modèles…</p> : modelsError ? <p role="alert">{modelsError}</p> : <p>Modèle prévu : <b>{selectedModel?.name ?? (singleReferenceMode ? 'Aucun modèle de référence configuré' : 'Aucun modèle compatible')}</b>{singleReferenceMode && <span className="block mt-1">Plusieurs vues ou un lieu réel sélectionné : génération avec références multiples.</span>}</p>}</div>}
+          <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(['16:9'] as const).map((value) => <button type="button" key={value} onClick={() => setFormat(value as Format)} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
+          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Durée</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => { setDurationS(seconds); setStoryboard([]); setMultiClipEstimatedPriceFcfa(null); }} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div></fieldset>
+          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); setStoryMode(option.value); setDurationS(5); setStoryboard([]); setMultiClipEstimatedPriceFcfa(null); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">5, 10, 15 ou 20 s de clips, puis 2 s de logo animé. Les clips sont répartis selon les limites du modèle sélectionné.</p></fieldset>
+          <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] text-[#88847d]">Le logo RIMCO animé ajoute 2 s à la durée sélectionnée.</p>
+          {mode === 'live' && <div className="mt-4 rounded-md bg-[#f8f7f4] px-3 py-2.5 text-[10px] text-[#716d66]">{modelsLoading ? <p role="status">Chargement des modèles…</p> : modelsError ? <p role="alert">{modelsError}</p> : <p>Modèle prévu : <b>{selectedModel?.name ?? (singleReferenceMode ? 'Aucun modèle de référence configuré' : 'Aucun modèle compatible')}</b>{singleReferenceMode && <span className="block mt-1">Génération à partir du storyboard et des vues du véhicule sélectionnées par l’IA.</span>}</p>}</div>}
           {mode === 'mock' && <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Simulation active : aucune vidéo payante ne sera générée.</p>}
           {error && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-xs text-red-700">{error}</p>}
-          <div className="mt-4 border-t border-[#eeeae4] pt-4"><p className="text-[10px] text-[#88847d]">Estimation avant lancement</p><p className="mt-1 text-sm font-semibold">{multiClip ? multiClipEstimatedPriceFcfa != null ? `≈ ${formatFcfa(multiClipEstimatedPriceFcfa)}` : 'Générez le storyboard pour calculer le total' : priceLabel} <span className="text-[10px] font-normal text-[#88847d]">{multiClip ? 'storyboard + clips · logo inclus' : `par génération · ${durationS} s`}</span></p>{multiClip && storyboardCostFcfa != null && <p className="mt-1 text-[10px] text-[#88847d]">Dont préparation IA du storyboard : ≈ {formatFcfa(storyboardCostFcfa)}{storyboardLedgerIds.length > 1 ? ` · ${storyboardLedgerIds.length} propositions` : ''}</p>}</div>
-          <button disabled={busy || generationActive || (multiClip ? !selectedDossier || storyboard.length < 2 : !selectedPhoto || mode === 'live' && (!selectedModel || !estimatedPrice))} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="mt-4 w-full rounded-md bg-[#c51e1c] py-3 text-xs font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation…' : generationActive ? 'Génération en cours…' : multiClip ? `Lancer ${storyMode === 'standard' ? 'Wan' : storyMode === 'pro' ? 'Kling' : 'Seedance'} · ${finalDurationSeconds} s` : 'Lancer la vidéo'}</button>
+          <div className="mt-4 border-t border-[#eeeae4] pt-4"><p className="text-[10px] text-[#88847d]">Estimation avant lancement</p><p className="mt-1 text-sm font-semibold">{storyboard.length ? multiClipEstimatedPriceFcfa != null ? `≈ ${formatFcfa(multiClipEstimatedPriceFcfa)}` : priceLabel : 'Générez le storyboard pour calculer le total'} <span className="text-[10px] font-normal text-[#88847d]">storyboard + vidéo · logo inclus</span></p>{storyboardCostFcfa != null && <p className="mt-1 text-[10px] text-[#88847d]">Dont préparation IA du storyboard : ≈ {formatFcfa(storyboardCostFcfa)}</p>}</div>
+          <button disabled={busy || generationActive || (!selectedDossier?.id || (multiClip ? storyboard.length < 2 : storyboard.length !== 1) || mode === 'live' && !selectedModel)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="mt-4 w-full rounded-md bg-[#c51e1c] py-3 text-xs font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation…' : generationActive ? 'Génération en cours…' : multiClip ? `Lancer ${storyMode === 'standard' ? 'Wan' : storyMode === 'pro' ? 'Kling' : 'Seedance'} · ${clipDurationSeconds} s + logo` : `Générer la vidéo · ${durationS} s + logo`}</button>
           {generationActive && <p id="generation-lock-message" role="status" className="mt-3 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Une génération est déjà en cours. Le bouton sera réactivé lorsque la vidéo sera prête.</p>}
         </section>}
-        <p className="px-1 text-[10px] leading-4 text-[#88847d]">{multiClip ? 'Le storyboard IA sélectionne les références plan par plan. Standard utilise Wan, Pro Kling et Premium Seedance.' : 'La photo du véhicule reste la référence. Le Studio déduit automatiquement le concept, le rythme et les mouvements à partir de votre brief et de vos choix.'}</p>
+        <p className="px-1 text-[10px] leading-4 text-[#88847d]">{multiClip ? 'Le storyboard IA sélectionne les références plan par plan. Standard utilise Wan, Pro Kling et Premium Seedance.' : 'Le storyboard IA propose un plan à valider avant génération. Les 2 secondes du logo RIMCO s’ajoutent à la durée des clips.'}</p>
       </aside>
     </form>
   );

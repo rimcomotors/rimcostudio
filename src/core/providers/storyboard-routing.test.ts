@@ -8,14 +8,14 @@ describe('routage des modes storyboard multi-clips', () => {
     expect(getStoryboardModeRoute('premium')).toMatchObject({ adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/reference-to-video' });
   });
 
-  it('reserves two seconds for the logo and enforces per-model clip limits', () => {
-    expect(getStoryboardClipBudget(15)).toBe(13);
-    expect(getStoryboardClipBudget(20)).toBe(18);
-    expect(areStoryboardClipDurationsValid('standard', 20, [10, 8])).toBe(true);
+  it('treats the choice as generated footage and adds the logo afterward', () => {
+    expect(getStoryboardClipBudget(15)).toBe(15);
+    expect(getStoryboardClipBudget(20)).toBe(20);
+    expect(areStoryboardClipDurationsValid('standard', 20, [10, 10])).toBe(true);
     expect(areStoryboardClipDurationsValid('standard', 20, [10, 9])).toBe(false);
-    expect(areStoryboardClipDurationsValid('pro', 15, [13])).toBe(true);
+    expect(areStoryboardClipDurationsValid('pro', 15, [15])).toBe(true);
     expect(areStoryboardClipDurationsValid('pro', 15, [16])).toBe(false);
-    expect(areStoryboardClipDurationsValid('premium', 20, [18])).toBe(true);
+    expect(areStoryboardClipDurationsValid('premium', 20, [20])).toBe(true);
     expect(areStoryboardClipDurationsValid('premium', 21, [18])).toBe(false);
   });
 });

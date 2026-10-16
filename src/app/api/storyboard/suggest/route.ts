@@ -4,7 +4,7 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { buildStoryboardInstruction, generatedVideoSeconds, storyboardSchema, validateStoryboard, type StoryboardShot } from '@/core/storyboard';
+import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, getSingleShotClipDurations, singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { createFalLlmProvider } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
@@ -13,21 +13,24 @@ import { findCuratedLocation } from '@/core/assets/location-catalog';
 import { calculateClientPriceFcfa } from '@/core/pricing';
 
 const requestSchema = z.object({
+  workflow: z.enum(['single', 'multi_clip']).default('multi_clip'),
   vehicleDossierId: z.string().uuid(),
   vehicleDossierIds: z.array(z.string().uuid()).max(20).default([]),
   placeIds: z.array(z.string().uuid()).max(12).default([]),
   mode: z.enum(['standard', 'pro', 'premium']),
-  durationSeconds: z.union([z.literal(15), z.literal(20)]),
+  durationSeconds: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
   purpose: z.enum(['presentation', 'advertising']),
   direction: z.string().trim().max(500).default(''),
 }).strict();
 const storyboardResponseSchema = z.object({ shots: storyboardSchema }).strict();
+const singleShotStoryboardResponseSchema = z.object({ shots: singleShotStoryboardSchema }).strict();
 
 export async function POST(request: Request) {
   try {
     const actor = await getActor();
     if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
     const input = requestSchema.parse(await request.json());
+    if (input.workflow === 'multi_clip' && input.durationSeconds !== 15 && input.durationSeconds !== 20) throw new HttpError(422, 'Le workflow multi-plans propose 15 ou 20 secondes de clips, puis ajoute 2 secondes de logo.');
     const supabase = await createSupabaseServerClient();
     const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
     const { data: dossiers, error: dossierError } = await supabase.from('vehicle_dossiers')
@@ -54,22 +57,27 @@ export async function POST(request: Request) {
     const route = getStoryboardModeRoute(input.mode);
     const selectedVehicle = vehiclePhotos.slice(0, route.maxReferenceImages);
     const selectedPlaces = places.slice(0, Math.max(0, route.maxReferenceImages - 1));
-    const instruction = buildStoryboardInstruction({
-      durationSeconds: input.durationSeconds, mode: input.mode,
+    const instructionInput = {
+      durationSeconds: input.durationSeconds,
       vehicle: [dossier.make, dossier.model, dossier.variant, dossier.color].filter(Boolean).join(' '),
       vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? 'Photo véhicule', angle: photo.angle })),
       places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category })),
       purpose: input.purpose, direction: input.direction,
-    });
+    };
+    const instruction = input.workflow === 'single'
+      ? buildSingleShotStoryboardInstruction(instructionInput)
+      : buildStoryboardInstruction({ ...instructionInput, durationSeconds: input.durationSeconds as 15 | 20, mode: input.mode });
 
     let shots: StoryboardShot[];
     let storyboardLedgerId: string | null = null;
     let storyboardCostUsd = 0;
     let totalEstimatedPriceFcfa: number | null = null;
     if (env.PROVIDERS_MODE === 'mock') {
-      const total = generatedVideoSeconds(input.durationSeconds);
-      const durations = total === 13 ? [7, 6] : [9, 9];
-      shots = storyboardSchema.parse(durations.map((durationSeconds, index) => ({
+      const total = input.durationSeconds;
+      const durations = input.workflow === 'single'
+        ? [total]
+        : total === 15 ? [8, 7] : [10, 10];
+      const drafts = durations.map((durationSeconds, index) => ({
         title: index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
         scene: index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',
         location: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.title ?? 'Abidjan, Côte d’Ivoire',
@@ -78,7 +86,8 @@ export async function POST(request: Request) {
         durationSeconds,
         vehiclePhotoId: selectedVehicle[index % selectedVehicle.length].id,
         locationPhotoId: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.id ?? null,
-      })));
+      }));
+      shots = input.workflow === 'single' ? singleShotStoryboardSchema.parse(drafts) : storyboardSchema.parse(drafts);
       totalEstimatedPriceFcfa = 0;
     } else {
       if (!env.FAL_KEY || !env.LLM_MODEL) throw new HttpError(503, 'Le modèle de storyboard IA n’est pas configuré.');
@@ -97,11 +106,15 @@ export async function POST(request: Request) {
             prompt, system_prompt: system, model: env.LLM_MODEL!, temperature: 0.2, max_tokens: 2400,
           } as never });
         });
-        const result = await provider.buildStoryboardWithCost(instruction, storyboardResponseSchema, 'You are an expert automotive commercial director. Return only JSON matching the requested schema. Use French for all creative text.');
+        const responseSchema = input.workflow === 'single' ? singleShotStoryboardResponseSchema : storyboardResponseSchema;
+        const result = await provider.buildStoryboardWithCost(instruction, responseSchema, 'You are an expert automotive commercial director. Return only JSON matching the requested schema. Use French for all creative text.');
         shots = result.fields.shots;
         storyboardCostUsd = result.costUsd ?? 0.02;
         if (videoModel) {
-          const videoCostUsd = generatedVideoSeconds(input.durationSeconds) * Number(videoModel.price_usd_per_second);
+          const generationSeconds = input.workflow === 'single'
+            ? getSingleShotClipDurations(input.durationSeconds as ClipDurationSeconds, route.adapterFamily).reduce((sum, seconds) => sum + seconds, 0)
+            : input.durationSeconds;
+          const videoCostUsd = generationSeconds * Number(videoModel.price_usd_per_second);
           totalEstimatedPriceFcfa = calculateClientPriceFcfa(videoCostUsd + storyboardCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
         }
         const { error: settleError } = await settleUsageCost(admin, { entryId: reservation, outcome: 'charged', actualCostUsd: storyboardCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
@@ -111,12 +124,13 @@ export async function POST(request: Request) {
         throw cause;
       }
     }
-    validateStoryboard(shots, input.durationSeconds, route.adapterFamily);
+    if (input.workflow === 'single') validateSingleShotStoryboard(shots, input.durationSeconds as ClipDurationSeconds, route.adapterFamily);
+    else validateStoryboard(shots, input.durationSeconds as 15 | 20, route.adapterFamily);
     const vehicleIds = new Set(selectedVehicle.map((photo) => photo.id));
     const placeIds = new Set(selectedPlaces.map((place) => place.id));
     if (shots.some((shot) => !vehicleIds.has(shot.vehiclePhotoId) || (shot.locationPhotoId && !placeIds.has(shot.locationPhotoId)))) {
       throw new HttpError(422, 'Le storyboard référence une image non autorisée. Régénérez la proposition.');
     }
-    return NextResponse.json({ storyboard: shots, prompt: instruction, mode: input.mode, durationSeconds: input.durationSeconds, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
+    return NextResponse.json({ storyboard: shots, prompt: instruction, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
   } catch (error) { return errorResponse(error); }
 }

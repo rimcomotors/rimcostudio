@@ -20,7 +20,7 @@ export const LOCKED_MODEL_POLICY = [
   { tier: 'pro', duration: 5, model: 'Kling O3 Pro' },
   { tier: 'pro', duration: 10, model: 'Kling O3 Pro' },
   { tier: 'pro', duration: 15, model: 'Kling O3 Pro' },
-  { tier: 'premium', duration: 5, model: 'Veo 3.1 Fast' },
+  { tier: 'premium', duration: 5, model: 'Seedance 2.5' },
   { tier: 'premium', duration: 10, model: 'Seedance 2.5' },
   { tier: 'premium', duration: 15, model: 'Seedance 2.5' },
   { tier: 'premium', duration: 20, model: 'Seedance 2.5' },
@@ -45,7 +45,7 @@ const ROUTES: Record<GenerationTier, Record<number, Route>> = {
     15: { tier: 'pro', adapterFamily: 'kling', endpoint: MODEL_ENDPOINTS.kling, outputDuration: 15, sourceDuration: 15 },
   },
   premium: {
-    5: { tier: 'premium', adapterFamily: 'veo', endpoint: MODEL_ENDPOINTS.veo, outputDuration: 5, sourceDuration: 6 },
+    5: { tier: 'premium', adapterFamily: 'seedance', endpoint: MODEL_ENDPOINTS.seedance, outputDuration: 5, sourceDuration: 5 },
     10: { tier: 'premium', adapterFamily: 'seedance', endpoint: MODEL_ENDPOINTS.seedance, outputDuration: 10, sourceDuration: 10 },
     15: { tier: 'premium', adapterFamily: 'seedance', endpoint: MODEL_ENDPOINTS.seedance, outputDuration: 15, sourceDuration: 15 },
     20: { tier: 'premium', adapterFamily: 'seedance', endpoint: MODEL_ENDPOINTS.seedance, outputDuration: 20, sourceDuration: 20 },
@@ -67,6 +67,6 @@ export function isModelOnRoute(
   duration: number,
 ): boolean {
   const route = getRouteForGeneration(tier, duration);
-  const durationSupported = Boolean(route && (model.allowedDurations.includes(duration) || route.adapterFamily === 'veo' && model.allowedDurations.includes(route.sourceDuration)));
+  const durationSupported = Boolean(route && model.allowedDurations.includes(route.sourceDuration));
   return Boolean(route && model.tier === tier && model.adapterFamily === route.adapterFamily && model.endpoint === route.endpoint && durationSupported);
 }

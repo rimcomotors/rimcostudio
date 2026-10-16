@@ -3,8 +3,8 @@ import { buildBrief } from '@/core/brief';
 import { shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
 
 const shots = [
-  { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 7, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
-  { title: 'Habitacle', scene: 'Détail intérieur', framing: 'Gros plan', location: 'Habitacle du véhicule', action: 'La caméra révèle les finitions', camera: 'Travelling rapproché', durationSeconds: 6, vehiclePhotoId: 'vehicle-interior' },
+  { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 8, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
+  { title: 'Habitacle', scene: 'Détail intérieur', framing: 'Gros plan', location: 'Habitacle du véhicule', action: 'La caméra révèle les finitions', camera: 'Travelling rapproché', durationSeconds: 7, vehiclePhotoId: 'vehicle-interior' },
 ];
 
 describe('storyboard', () => {
@@ -14,11 +14,11 @@ describe('storyboard', () => {
     expect(() => shotDraftSchema.parse({ ...shots[0], extra: 'ignored' })).toThrow();
   });
 
-  it('requires the generated clips to fill the final runtime before its two-second logo card', () => {
+  it('requires generated clips to fill the selected runtime before adding the logo card', () => {
     expect(validateStoryboard(shots, 15, 'wan')).toBe(true);
     expect(() => validateStoryboard(shots, 20, 'wan')).toThrow(/durée/i);
-    expect(() => validateStoryboard([{ ...shots[0], durationSeconds: 11 }, { ...shots[1], durationSeconds: 7 }], 20, 'wan')).toThrow(/maximum/i);
-    expect(validateStoryboard([{ ...shots[0], durationSeconds: 12 }, { ...shots[1], durationSeconds: 6 }], 20, 'kling')).toBe(true);
+    expect(() => validateStoryboard([{ ...shots[0], durationSeconds: 11 }, { ...shots[1], durationSeconds: 9 }], 20, 'wan')).toThrow(/maximum/i);
+    expect(validateStoryboard([{ ...shots[0], durationSeconds: 12 }, { ...shots[1], durationSeconds: 8 }], 20, 'kling')).toBe(true);
   });
 
   it('keeps the selected vehicle identity and image references in each shot prompt', () => {

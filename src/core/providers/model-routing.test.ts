@@ -16,7 +16,7 @@ describe('règles de routage vidéo', () => {
   });
 
   it('route Premium selon la durée', () => {
-    expect(getRouteForGeneration('premium', 5)).toMatchObject({ adapterFamily: 'veo', endpoint: 'fal-ai/veo3.1/fast/image-to-video', sourceDuration: 6 });
+    expect(getRouteForGeneration('premium', 5)).toMatchObject({ adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/image-to-video', sourceDuration: 5 });
     expect(getRouteForGeneration('premium', 10)).toMatchObject({ adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/image-to-video' });
     expect(getRouteForGeneration('premium', 30)).toMatchObject({ adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/image-to-video' });
   });
@@ -30,6 +30,6 @@ describe('règles de routage vidéo', () => {
   it('rejette un modèle hors route même si son endpoint est actif', () => {
     expect(isModelOnRoute({ tier: 'pro', adapterFamily: 'kling', endpoint: 'fal-ai/kling-video/o3/pro/image-to-video', allowedDurations: [5, 10, 15] }, 'pro', 5)).toBe(true);
     expect(isModelOnRoute({ tier: 'standard', adapterFamily: 'kling', endpoint: 'fal-ai/kling-video/o3/pro/image-to-video', allowedDurations: [5, 10, 15] }, 'standard', 5)).toBe(false);
-    expect(isModelOnRoute({ tier: 'premium', adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/image-to-video', allowedDurations: [10, 15, 20, 30] }, 'premium', 20)).toBe(true);
+    expect(isModelOnRoute({ tier: 'premium', adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/image-to-video', allowedDurations: [5, 10, 15, 20, 30] }, 'premium', 20)).toBe(true);
   });
 });

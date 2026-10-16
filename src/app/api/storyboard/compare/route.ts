@@ -12,7 +12,7 @@ import { estimateStoryboardComparisonUsd, reserveStoryboardComparisonBudget, STO
 const compareSchema = requestSchema.extend({
   vehicleDossierId: z.string().uuid(),
   placeIds: z.array(z.string().uuid()).max(12).default([]),
-  finalDurationSeconds: z.union([z.literal(15), z.literal(20)]),
+  clipDurationSeconds: z.union([z.literal(15), z.literal(20)]),
   purpose: z.enum(['presentation', 'advertising']),
   storyboard: storyboardSchema,
   campaignId: z.string().uuid().optional(),
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     const input = compareSchema.parse(await request.json());
     if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
     if (input.format !== '16:9' || input.audioAssetId) throw new HttpError(422, 'Le comparatif utilise le format horizontal 16:9, sans audio.');
-    for (const mode of comparisonModes) validateStoryboard(input.storyboard, input.finalDurationSeconds, getStoryboardModeRoute(mode).adapterFamily);
+    for (const mode of comparisonModes) validateStoryboard(input.storyboard, input.clipDurationSeconds, getStoryboardModeRoute(mode).adapterFamily);
     if (env.PROVIDERS_MODE !== 'live') throw new HttpError(503, 'Le comparatif nécessite un environnement Fal connecté.');
 
     const admin = createStorageAdminClient();
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
     if (models.some((model) => !model.pricing_verified_at || Date.now() - new Date(model.pricing_verified_at).getTime() > 7 * 24 * 60 * 60 * 1000)) {
       throw new HttpError(503, 'Les tarifs des modèles doivent être vérifiés et datés dans la configuration avant tout lancement.');
     }
-    const clipSeconds = input.finalDurationSeconds - 2;
+    const clipSeconds = input.clipDurationSeconds;
     const estimatedRunUsd = estimateStoryboardComparisonUsd(models.map((model) => Number(model.price_usd_per_second)), clipSeconds);
 
     let campaignId = input.campaignId;
@@ -69,7 +69,7 @@ export async function POST(request: Request) {
     const base = requestSchema.parse(input);
     const results = await Promise.allSettled(comparisonModes.map((storyMode) => createLiveStoryboard(actor, {
       ...base,
-      storyboard: input.storyboard, storyMode, finalDurationSeconds: input.finalDurationSeconds,
+      storyboard: input.storyboard, storyMode, clipDurationSeconds: input.clipDurationSeconds,
       vehicleDossierId: input.vehicleDossierId, placeIds: input.placeIds, purpose: input.purpose,
       comparisonCampaignId: campaignId,
     })));

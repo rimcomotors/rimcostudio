@@ -8,13 +8,13 @@ import { makeFinalVideoArgs, makeMultiClipMontageArgs, makeShotMontageArgs, shou
 
 describe('FFmpeg final video arguments', () => {
   it('joins a variable number of generated clips and reserves a separate animated two-second logo card', () => {
-    const args = makeMultiClipMontageArgs({ shotFiles: ['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4'], shotDurations: [5, 4, 4], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', finalDurationSeconds: 15 });
+    const args = makeMultiClipMontageArgs({ shotFiles: ['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4'], shotDurations: [5, 4, 6], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', clipDurationSeconds: 15, finalDurationSeconds: 17 });
     expect(args.filter((value) => value.endsWith('.mp4'))).toEqual(['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4', '/tmp/final.mp4']);
     expect(args.join(' ')).toContain('concat=n=3');
     expect(args.join(' ')).toContain('d=2');
     expect(args.join(' ')).toContain('fade=t=in');
     expect(args.join(' ')).toContain('min(t/0.6,1)');
-    expect(args).toContain('15');
+    expect(args).toContain('17');
   });
 
   it('overlays the RIMCO logo at the upper left and keeps the requested duration', () => {
@@ -89,10 +89,10 @@ describe('FFmpeg logo rendering', () => {
     };
     try {
       run(['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x334455:s=320x180:r=24:d=7', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clip]);
-      run(makeMultiClipMontageArgs({ shotFiles: [clip, clip], shotDurations: [7, 6], logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: output, finalDurationSeconds: 15, format: '16:9' }));
+      run(makeMultiClipMontageArgs({ shotFiles: [clip, clip], shotDurations: [7, 8], logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: output, clipDurationSeconds: 15, finalDurationSeconds: 17, format: '16:9' }));
       expect((await stat(output)).size).toBeGreaterThan(0);
       const probe = run(['-hide_banner', '-i', output, '-f', 'null', '-']);
-      expect(`${probe.stderr}`).toContain('Duration: 00:00:15.00');
+      expect(`${probe.stderr}`).toContain('Duration: 00:00:17.00');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

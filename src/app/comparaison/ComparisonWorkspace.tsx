@@ -56,13 +56,13 @@ export function ComparisonWorkspace({ mode, usdToEurRate, llmMaxCostUsd }: Props
     return () => window.clearInterval(timer);
   }, [comparisons]);
 
-  const compatibleModels = useMemo(() => models.filter((model) => model.isActive && (model.adapterFamily === 'veo' ? model.allowedDurations.includes(6) : model.allowedDurations.includes(5)) && model.allowedFormats.includes(format)
+  const compatibleModels = useMemo(() => models.filter((model) => model.isActive && model.adapterFamily !== 'veo' && model.allowedDurations.includes(5) && model.allowedFormats.includes(format)
     && ((model.adapterFamily === 'kling' && model.falEndpointId === 'fal-ai/kling-video/o3/pro/image-to-video')
       || (model.adapterFamily === 'seedance' && model.falEndpointId === 'bytedance/seedance-2.5/image-to-video')
       || (model.adapterFamily === 'wan' && model.falEndpointId === 'alibaba/wan-3.0/image-to-video')
-      || (model.adapterFamily === 'veo' && model.falEndpointId === 'fal-ai/veo3.1/fast/image-to-video' && model.allowedDurations.includes(6)))), [models, format]);
+      )), [models, format]);
   const selectedModels = compatibleModels.filter((model) => selected.includes(model.id));
-  const estimatedEur = selectedModels.reduce((sum, model) => sum + (model.adapterFamily === 'veo' ? 6 : 5) * model.priceUsdPerSecond * usdToEurRate, 0) + (selectedModels.length ? 2 * llmMaxCostUsd * usdToEurRate : 0);
+  const estimatedEur = selectedModels.reduce((sum, model) => sum + 5 * model.priceUsdPerSecond * usdToEurRate, 0) + (selectedModels.length ? 2 * llmMaxCostUsd * usdToEurRate : 0);
 
   function toggle(id: string) {
     setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : current.length < 3 ? [...current, id] : current);
@@ -139,7 +139,7 @@ export function ComparisonWorkspace({ mode, usdToEurRate, llmMaxCostUsd }: Props
           <input type="checkbox" checked={selected.includes(model.id)} onChange={() => toggle(model.id)} disabled={!selected.includes(model.id) && selected.length >= 3} className="size-4 accent-[#c51e1c]" />
           <span className="flex-1">{model.name}</span><span className="text-xs text-[#716d66]">{model.tier === 'test' ? 'Test' : model.tier} · {model.priceUsdPerSecond.toFixed(2)} USD/s</span>
         </label>)}</div>
-        {compatibleModels.length < 2 && <p className="mt-3 text-xs leading-5 text-[#716d66]">Activez un second adaptateur compatible dans l’espace Admin. Wan 3.0 Test est disponible pour les ratios 16:9, 9:16 et 1:1. Veo Premium génère une source de 6 s, ensuite coupée à 5 s.</p>}
+        {compatibleModels.length < 2 && <p className="mt-3 text-xs leading-5 text-[#716d66]">Activez un second adaptateur compatible dans l’espace Admin. Wan 3.0 Test est disponible pour les ratios 16:9, 9:16 et 1:1. Veo est désactivé dans cette version.</p>}
       </fieldset>
       <label className="grid gap-2 text-sm font-semibold">Notes de comparaison<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} rows={2} className="rounded-md border border-[#d2cec6] bg-[#fbfbfa] p-3 text-sm font-normal" /></label>
       {mode === 'live' && <p className="max-w-3xl border-y border-[#e4e1db] py-3 text-xs leading-5 text-[#716d66]">Coût estimé de cette comparaison, brief LLM inclus : <strong className="text-[#253b4e]">{estimatedEur.toLocaleString('fr-FR',{minimumFractionDigits:2,maximumFractionDigits:2})} EUR</strong>. Le coût réel sera suivi après génération; le plafond de dépense est géré par fal.ai.</p>}
