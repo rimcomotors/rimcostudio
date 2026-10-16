@@ -22,6 +22,9 @@ if (mockWithoutSupabase) {
     test.setTimeout(90_000);
     await page.goto('/studio');
     await page.getByLabel('Véhicule').selectOption({ index: 1 });
+    await expect(page.getByLabel('Véhicule')).not.toHaveValue('');
+    await expect(page.getByText(/vue\(s\) rattachée/)).toBeVisible();
+    await expect(page.getByRole('button', { name: /Générer la vidéo/ })).toBeEnabled({ timeout: 15_000 });
     const title = `Essai RIMCO ${Date.now()}`;
 
     await page.getByLabel('Titre de la vidéo').fill(title);
@@ -67,6 +70,9 @@ if (mockWithoutSupabase) {
     await signIn(page, adminEmail, adminPassword);
     await page.goto('/studio');
     await page.getByLabel('Véhicule').selectOption({ index: 1 });
+    await expect(page.getByLabel('Véhicule')).not.toHaveValue('');
+    await expect(page.getByText(/vue\(s\) rattachée/)).toBeVisible();
+    await expect(page.getByRole('button', { name: /Générer la vidéo/ })).toBeEnabled({ timeout: 15_000 });
     await page.getByLabel('Titre de la vidéo').fill('Essai E2E');
     await page.getByLabel('Description de la vidéo').fill('Une Haval H6 bleue roule doucement dans le Plateau à Abidjan.');
     const createRequest = page.waitForRequest((request) => request.url().endsWith('/api/versions') && request.method() === 'POST');
