@@ -14,6 +14,7 @@ type VehicleDossier = { id: string | null; key: string; dossierIds?: string[]; m
 type PlaceAsset = { id: string; title?: string; category?: string; previewUrl?: string | null; isCurated?: boolean };
 type StoryShot = { title: string; scene: string; framing: string; location: string; action: string; camera: string; durationSeconds: number; vehiclePhotoId: string; locationPhotoId?: string | null };
 type ComparisonJob = { mode: 'standard' | 'pro'; id?: string; status: string; completedShots?: number; totalShots?: number; error?: string };
+const premiumDurationOptions = [5, 10, 15, 20];
 const lightOptions = ['Lumière naturelle claire du matin'];
 const characterOptions = [
   { value: '', label: 'Sans personnage · recommandé pour le premier test' },
@@ -77,7 +78,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
     : routedModel;
   const estimatedPrice = selectedModel?.estimatedPricesFcfa?.[String(durationS)];
   const priceLabel = mode === 'live' && estimatedPrice ? `≈ ${formatFcfa(estimatedPrice)}` : mode === 'mock' ? 'Simulation' : '—';
-  const durationOptions = mode === 'mock' ? [5] : selectedModel?.durations ?? getRoutedDurations(tier);
+  const durationOptions = mode === 'mock' ? [5] : tier === 'premium' ? premiumDurationOptions : selectedModel?.durations ?? getRoutedDurations(tier);
   const generationActive = Boolean(job && !['ready', 'failed'].includes(job.status));
   const lightingChoices = Array.from(new Map(sceneChoices.map((scene) => [scene.lighting, scene])).values());
 
@@ -86,7 +87,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   }, [selectedModel, format]);
 
   useEffect(() => {
-    const allowed = mode === 'mock' ? [5] : selectedModel?.durations ?? getRoutedDurations(tier);
+    const allowed = mode === 'mock' ? [5] : tier === 'premium' ? premiumDurationOptions : selectedModel?.durations ?? getRoutedDurations(tier);
     if (!allowed.includes(durationS)) setDurationS(allowed[0]);
   }, [durationS, mode, selectedModel, tier]);
 
@@ -307,7 +308,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         {!multiClip && <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
           <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(mode === 'live' ? selectedModel?.formats ?? ['16:9', '9:16'] : ['16:9', '9:16', '1:1', '4:5']).map((value) => <button type="button" key={value} onClick={() => setFormat(value as Format)} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
           <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Durée</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => setDurationS(seconds)} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div></fieldset>
-          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); setDurationS(5); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Standard · Wan, 5 s. Pro · Kling, 5 à 15 s. Premium · Veo/Seedance, 5 à 30 s selon le modèle.</p></fieldset>
+          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); setDurationS(5); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Standard · Wan, 5 s. Pro · Kling, 5 à 15 s. Premium · Veo/Seedance, jusqu’à 20 s.</p></fieldset>
           <label className="mt-4 flex items-center justify-between gap-3 border-t border-[#eeeae4] pt-4 text-[11px] font-semibold"><span>Ajouter le logo RIMCO<small className="mt-1 block text-[10px] font-normal text-[#88847d]">Incrusté après la génération</small></span><input type="checkbox" checked={overlayLogo} onChange={(event) => setOverlayLogo(event.target.checked)} className="size-4 accent-[#c51e1c]" /></label>
           {mode === 'live' && <div className="mt-4 rounded-md bg-[#f8f7f4] px-3 py-2.5 text-[10px] text-[#716d66]">{modelsLoading ? <p role="status">Chargement des modèles…</p> : modelsError ? <p role="alert">{modelsError}</p> : <p>Modèle prévu : <b>{selectedModel?.name ?? (singleReferenceMode ? 'Aucun modèle de référence configuré' : 'Aucun modèle compatible')}</b>{singleReferenceMode && <span className="block mt-1">Plusieurs vues ou un lieu réel sélectionné : génération avec références multiples.</span>}</p>}</div>}
           {mode === 'mock' && <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Simulation active : aucune vidéo payante ne sera générée.</p>}
