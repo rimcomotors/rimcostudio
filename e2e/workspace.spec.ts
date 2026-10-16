@@ -3,12 +3,10 @@ import { expect, test } from '@playwright/test';
 const mockWithoutSupabase = process.env.E2E_MOCK_NO_SUPABASE === '1';
 const adminEmail = process.env.E2E_ADMIN_EMAIL ?? 'admin@rimco.test';
 const adminPassword = process.env.E2E_ADMIN_PASSWORD;
-const creatorEmail = process.env.E2E_CREATOR_EMAIL ?? 'collaborateur@rimco.test';
 
 if (mockWithoutSupabase) {
   test('le studio de simulation est utilisable sans compte Supabase', async ({ page }) => {
     await page.goto('/studio');
-
     await expect(page.getByRole('heading', { name: 'Créer une vidéo' })).toBeVisible();
     await expect(page.getByText('Mode simulation', { exact: false })).toBeVisible();
     await expect(page.getByText('Durée de la vidéo')).toBeVisible();
@@ -26,18 +24,15 @@ if (mockWithoutSupabase) {
     await expect(page.getByText(/vue\(s\) rattachée/)).toBeVisible();
     await expect(page.getByRole('button', { name: /Générer la vidéo/ })).toBeEnabled({ timeout: 15_000 });
     const title = `Essai RIMCO ${Date.now()}`;
-
     await page.getByLabel('Titre de la vidéo').fill(title);
-    await page.getByLabel('Description de la vidéo').fill('Une lumière naturelle douce sur un boulevard calme.');
+    await page.getByLabel(/Précision complémentaire/).fill('Une lumière naturelle douce sur un boulevard calme.');
     const createRequest = page.waitForRequest((request) => request.url().endsWith('/api/versions') && request.method() === 'POST');
     await page.getByRole('button', { name: /Générer la vidéo/ }).click();
     expect((await createRequest).postDataJSON()).toMatchObject({ overlayLogo: true, title });
-
     await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({ timeout: 65_000 });
     await page.getByRole('link', { name: 'Voir ma vidéo' }).click();
     await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
     await expect(page.locator('video[aria-label^="Aperçu de"]').first()).toBeVisible();
-
     const download = page.waitForEvent('download');
     await page.getByRole('link', { name: 'Télécharger le MP4' }).first().click();
     await expect(await download).toBeTruthy();
@@ -81,7 +76,7 @@ if (mockWithoutSupabase) {
     await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({ timeout: 65_000 });
     await page.getByRole('link', { name: 'Voir ma vidéo' }).click();
     await page.goto('/bibliotheque');
-    await expect(page.locator('video[aria-label^="Aperçu de"]').first()).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Télécharger le MP4' }).first()).toBeVisible();
     const download = page.waitForEvent('download');
     await page.getByRole('link', { name: 'Télécharger le MP4' }).first().click();
     await expect(await download).toBeTruthy();
