@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBrief } from '@/core/brief';
-import { shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
+import { expandSingleShotStoryboard, finalVideoSeconds, getSingleShotClipDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
 
 const shots = [
   { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 8, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
@@ -31,6 +31,24 @@ describe('storyboard', () => {
     expect(prompt).toContain('vehicle-front');
     expect(prompt).toContain('place-plateau');
     expect(prompt).toContain('shot 1 of 2');
-    expect(prompt).toContain('Do not add titles, logos, captions, text, or transitions');
+    expect(prompt).toContain('no titles, captions, overlays, added logos, or transitions');
+  });
+
+  it('uses the selected aspect ratio in the master prompt', () => {
+    const brief = buildBrief('Film automobile carré.', {
+      vehicle_asset_id: 'vehicle-folder-1', vehicle_description: 'Haval H6 bleu nuit', format: '1:1',
+    });
+    const prompt = shotToPrompt(brief, shots[0], 0, 1);
+    expect(prompt).toContain('1:1 image-to-video automotive shot');
+    expect(prompt).not.toContain('16:9 image-to-video automotive shot');
+  });
+
+  it('splits long endpoint-bound shots and appends two logo seconds to the final runtime', () => {
+    expect(getSingleShotClipDurations(20, 'wan')).toEqual([10, 10]);
+    expect(getSingleShotClipDurations(20, 'kling')).toEqual([10, 10]);
+    expect(getSingleShotClipDurations(20, 'seedance')).toEqual([20]);
+    expect(finalVideoSeconds(20)).toBe(22);
+    expect(finalVideoSeconds(5)).toBe(7);
+    expect(expandSingleShotStoryboard(shots[0], 20, 'wan').map((shot) => shot.durationSeconds)).toEqual([10, 10]);
   });
 });

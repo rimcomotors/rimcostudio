@@ -5,9 +5,8 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { formatFcfa } from '@/core/pricing';
 import { getScenePresets, getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
-import { getRouteForGeneration } from '@/core/providers/model-routing';
 
-type Format = '16:9' | '9:16';
+type Format = '16:9' | '9:16' | '1:1';
 type Job = { id: string; status: string; error?: string; prompt?: string; completedShots?: number; totalShots?: number; estimatedPriceFcfa?: number };
 type Model = { id: string; name: string; tier: string; adapterFamily: string; formats: Format[]; durations: number[]; estimatedPricesFcfa: Record<string, number>; isDefault: boolean; isReference: boolean };
 type VehicleDossier = { id: string | null; key: string; dossierIds?: string[]; make: string; model: string; color?: string | null; variant?: string | null; photos: Array<{ id: string; photoRole: string; title: string; angle?: string | null; previewUrl?: string | null }> };
@@ -39,11 +38,15 @@ function buildAutomaticShots(input: {
   placeIds: string[];
   durationSeconds: number;
   multiClip: boolean;
-  tier: 'standard' | 'pro' | 'premium';
   selectedPhotoId?: string;
 }): StoryShot[] {
-  const minClipSeconds = input.tier === 'standard' ? 2 : input.tier === 'pro' ? 3 : 4;
+  // Keep the creative shot count identical across tiers: every endpoint can run
+  // these segments, while longer single shots are split by the server adapter.
+  const minClipSeconds = 4;
   const chosenPlaces = input.placeIds.map((id) => input.places.find((place) => place.id === id)).filter((place): place is PlaceAsset => Boolean(place));
+  const orderedPhotos = input.vehicle.photos.length > 1 && input.selectedPhotoId
+    ? [input.vehicle.photos.find((photo) => photo.id === input.selectedPhotoId), ...input.vehicle.photos.filter((photo) => photo.id !== input.selectedPhotoId)].filter((photo): photo is VehicleDossier['photos'][number] => Boolean(photo))
+    : input.vehicle.photos;
   const requestedCount = input.multiClip ? Math.max(2, input.vehicle.photos.length, chosenPlaces.length) : 1;
   const maxCount = input.multiClip ? Math.min(6, Math.floor(input.durationSeconds / minClipSeconds)) : 1;
   if (input.multiClip && chosenPlaces.length > maxCount) {
@@ -56,8 +59,9 @@ function buildAutomaticShots(input: {
   const baseDuration = Math.floor(input.durationSeconds / shotCount);
   const remainder = input.durationSeconds % shotCount;
   const shots = Array.from({ length: shotCount }, (_, index) => {
+    const isFinalShot = index === shotCount - 1;
     const photo = input.multiClip
-      ? input.vehicle.photos[index % input.vehicle.photos.length]
+      ? orderedPhotos[index % orderedPhotos.length]
       : input.vehicle.photos.find((item) => item.id === input.selectedPhotoId) ?? input.vehicle.photos[0];
     const place = chosenPlaces[index % Math.max(1, chosenPlaces.length)];
     return {
@@ -65,14 +69,16 @@ function buildAutomaticShots(input: {
       scene: photo.angle ?? photo.title ?? 'Présentation fidèle du véhicule',
       framing: photo.angle ?? 'Cadrage adapté à la photo de référence',
       location: place?.title ?? 'Lieu réel en Côte d’Ivoire',
-      action: 'Mouvement lent et naturel, sans modifier la forme, la couleur ni les équipements visibles du véhicule.',
-      camera: index === 0 ? 'Travelling lent et stable' : 'Mouvement doux, raccord visuel avec le plan précédent',
+      action: isFinalShot
+        ? 'Plan hero final : véhicule à l’arrêt, composition publicitaire élégante, angle strictement conforme à la photo de référence.'
+        : 'Mouvement lent et naturel, sans modifier la forme, la couleur ni les équipements visibles du véhicule.',
+      camera: isFinalShot ? 'Caméra basse, push-in lent et stable sans révéler d’angle absent de la référence' : index === 0 ? 'Travelling lent et stable' : 'Mouvement doux, raccord visuel avec le plan précédent',
       durationSeconds: baseDuration + (index < remainder ? 1 : 0),
       vehiclePhotoId: photo.id,
       locationPhotoId: place?.id ?? null,
     };
   });
-  const maxClipSeconds = input.tier === 'standard' ? 10 : input.tier === 'pro' ? 15 : 30;
+  const maxClipSeconds = 10;
   if (input.multiClip && shots.some((shot) => shot.durationSeconds < minClipSeconds || shot.durationSeconds > maxClipSeconds)) {
     throw new Error('La durée ne peut pas être répartie en clips compatibles avec ce modèle. Choisissez une autre durée ou un autre niveau.');
   }
@@ -100,7 +106,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [purpose, setPurpose] = useState<'presentation' | 'advertising'>('presentation');
+  const purpose = 'advertising' as const;
   const [vehicleDossiers, setVehicleDossiers] = useState<VehicleDossier[]>([]);
   const [places, setPlaces] = useState<PlaceAsset[]>([]);
   const [vehicleDossierId, setVehicleDossierId] = useState('');
@@ -109,8 +115,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
 
   const selectedDossier = vehicleDossiers.find((vehicle) => vehicle.key === vehicleDossierId);
   const effectivePlaceIds = durationS >= 10 ? placeIds : (locationAssetId ? [locationAssetId] : placeIds.slice(0, 1));
-  const tierMaxClipSeconds = tier === 'standard' ? 10 : tier === 'pro' ? 15 : 30;
-  const multiClip = Boolean(selectedDossier && (selectedDossier.photos.length > 1 || durationS >= 10 && effectivePlaceIds.length > 1 || durationS > tierMaxClipSeconds));
+  const multiClip = Boolean(selectedDossier && durationS >= 10 && (selectedDossier.photos.length > 1 || effectivePlaceIds.length > 1));
   const selectedPhoto = selectedDossier?.photos.find((photo) => photo.id === assetId) ?? selectedDossier?.photos[0];
   const selectedAsset = selectedPhoto ? { ...selectedPhoto, make: selectedDossier?.make, model: selectedDossier?.model, color: selectedDossier?.color } : undefined;
   const vehicleCategory = inferVehicleCategory(selectedAsset?.make, selectedAsset?.model);
@@ -119,16 +124,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const universalScenes = allScenes.filter((scene) => scene.category === 'autre' && !relevantScenes.some((recommended) => recommended.id === scene.id));
   const sceneChoices = [...relevantScenes, ...universalScenes].slice(0, 8);
   const selectedScene = getScenePreset(scenePresetId) ?? relevantScenes[0];
-  const compatibleModels = availableModels.filter((model) => model.tier === tier && !model.isReference);
-  const route = getRouteForGeneration(tier, durationS);
-  const routedModel = compatibleModels.find((model) => model.adapterFamily === route?.adapterFamily && model.durations.includes(durationS) && model.formats.includes(format));
-  const singleReferenceMode = !multiClip;
-  const selectedModel = singleReferenceMode
-    ? availableModels.find((model) => model.tier === tier && model.isReference && model.formats.includes(format))
-    : routedModel;
-  const storyboardModel = multiClip
-    ? availableModels.find((model) => model.tier === tier && model.isReference && model.formats.includes(format))
-    : selectedModel;
+  const storyboardModel = availableModels.find((model) => model.tier === tier && model.isReference && model.durations.includes(durationS) && model.formats.includes(format));
   const estimatedPriceFcfa = storyboardModel?.estimatedPricesFcfa[String(durationS)];
   const generationActive = Boolean(job && !['ready', 'failed'].includes(job.status));
   const lightingChoices = Array.from(new Map(sceneChoices.map((scene) => [getLightingLabel(scene.lighting), scene])).entries())
@@ -141,7 +137,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   useEffect(() => {
     const allowed = durationOptions;
     if (!allowed.includes(durationS)) setDurationS(allowed[0]);
-  }, [durationS, mode, selectedModel, tier]);
+  }, [durationS, mode, storyboardModel, tier]);
 
   useEffect(() => {
     if (mode !== 'live') return;
@@ -217,7 +213,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
     setBusy(true);
     try {
       if (!selectedDossier?.id || !selectedDossier.photos.length) throw new Error('Choisissez un véhicule avec au moins une photo validée.');
-      const shots = buildAutomaticShots({ vehicle: selectedDossier, places, placeIds: effectivePlaceIds, durationSeconds: durationS, multiClip, tier, selectedPhotoId: assetId });
+      const shots = buildAutomaticShots({ vehicle: selectedDossier, places, placeIds: effectivePlaceIds, durationSeconds: durationS, multiClip, selectedPhotoId: assetId });
       const firstPhoto = selectedDossier.photos.find((photo) => photo.id === shots[0].vehiclePhotoId) ?? selectedDossier.photos[0];
       const workflow = multiClip ? 'multi_clip' : 'single_storyboard';
       const payload = multiClip
@@ -259,8 +255,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
 
       <aside id="generation-options" className="min-w-0 space-y-3 xl:sticky xl:top-5">
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-2 text-[11px] font-semibold">Durée de la vidéo</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => { setDurationS(seconds); clearFormError(); if (seconds < 10 && placeIds.length > 1) setPlaceIds((current) => current.slice(0, 1)); }} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">La durée choisie correspond aux clips. L’animation du logo est ajoutée à la fin.</p></fieldset>
-          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Intention</legend><div className="flex gap-1.5">{([{ value: 'presentation', label: 'Présentation fidèle' }, { value: 'advertising', label: 'Publicité premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setPurpose(option.value); clearFormError(); }} aria-pressed={purpose === option.value} className={`flex-1 rounded-full border px-2 py-1.5 text-[10px] ${purpose === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div></fieldset>
+          <fieldset><legend className="mb-2 text-[11px] font-semibold">Durée de la vidéo</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => { setDurationS(seconds); clearFormError(); if (seconds < 10 && placeIds.length > 1) setPlaceIds((current) => current.slice(0, 1)); }} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">{durationS} s de clips + 2 s de logo animé = {durationS + 2} s au total.</p></fieldset>
         </section>
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4 text-[#161619]">
@@ -284,15 +279,15 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         </section>
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(['16:9', '9:16'] as const).map((value) => <button type="button" key={value} onClick={() => { setFormat(value); clearFormError(); }} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
-          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); clearFormError(); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Durée des clips : {durationS} s.</p></fieldset>
+          <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(['16:9', '9:16', '1:1'] as const).map((value) => <button type="button" key={value} onClick={() => { setFormat(value); clearFormError(); }} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
+          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); clearFormError(); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Clips générés : {durationS} s · vidéo finale avec logo : {durationS + 2} s.</p></fieldset>
           {mode === 'live' && modelsError && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">{modelsError}</p>}
           {mode === 'live' && !modelsLoading && !modelsError && !storyboardModel && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">Aucune option disponible pour cette durée et ce format. Choisissez un autre niveau ou format.</p>}
           {mode === 'mock' && <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Simulation active : aucune vidéo payante ne sera générée.</p>}
           {mode === 'live' && estimatedPriceFcfa != null && <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] text-[#88847d]">Estimation vidéo · environ {formatFcfa(estimatedPriceFcfa)}</p>}
           <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] leading-4 text-[#88847d]">La vidéo sera générée directement. Les plans et les lieux suivront automatiquement vos choix.</p>
         </section>
-        <p className="px-1 text-[10px] leading-4 text-[#88847d]">{multiClip ? 'Plusieurs vues ou lieux : clips assemblés automatiquement.' : 'Une seule vue et un seul lieu : génération en un plan.'}</p>
+        <p className="px-1 text-[10px] leading-4 text-[#88847d]">{multiClip ? 'Les vues et lieux sélectionnés déterminent les plans, assemblés automatiquement.' : 'Un plan créatif. Si nécessaire, le modèle le répartit en plusieurs clips avant le montage final.'}</p>
       </aside>
       <div className="space-y-3 xl:col-span-2">
         {error && <div role="alert" className="rounded-md border border-red-100 bg-red-50 p-4 text-xs leading-5 text-red-800"><p>{error}</p><button type="submit" disabled={busy} className="mt-2 font-semibold underline underline-offset-2">Réessayer la génération</button></div>}

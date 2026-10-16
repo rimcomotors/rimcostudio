@@ -38,6 +38,18 @@ describe('fal Reference-to-Video adapters', () => {
     } });
   });
 
+  it('passes the selected square ratio to all three reference endpoints', async () => {
+    mockSubmit.mockResolvedValue({ request_id: 'aspect-request' });
+    const { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider } = await import('./fal-reference-video');
+    const squareInput = { ...input, aspectRatio: '1:1' as const, endUserId: 'user-1' };
+    await wanReferenceVideoProvider.submit(squareInput);
+    expect(mockSubmit.mock.calls.at(-1)?.[1]).toMatchObject({ input: { aspect_ratio: '1:1' } });
+    await klingReferenceVideoProvider.submit(squareInput);
+    expect(mockSubmit.mock.calls.at(-1)?.[1]).toMatchObject({ input: { aspect_ratio: '1:1' } });
+    await seedanceReferenceVideoProvider.submit(squareInput);
+    expect(mockSubmit.mock.calls.at(-1)?.[1]).toMatchObject({ input: { aspect_ratio: '1:1' } });
+  });
+
   it('keeps useful provider error details while masking URLs and credential-like values', async () => {
     const { safeProviderError } = await import('./fal-reference-video');
     expect(safeProviderError(new Error('Invalid reference https://assets.example/private.jpg bearer: secret-token')))

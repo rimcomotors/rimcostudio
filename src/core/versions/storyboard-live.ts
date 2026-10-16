@@ -41,7 +41,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
   const [{ data: dossiers, error: dossierError }, { data: model, error: modelError }] = await Promise.all([
     authenticated.from('vehicle_dossiers').select('id,make,model,color,variant,brand_id,assets(id,kind,path,title,angle,photo_role,status)').in('id', dossierIds).eq('brand_id', actor.brandId),
-    admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,price_usd_per_second,pricing_verified_at,allowed_formats,is_active').eq('fal_endpoint_id', route.endpoint).eq('is_active', true).single(),
+    admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,price_usd_per_second,pricing_verified_at,allowed_formats,allowed_durations,is_active').eq('fal_endpoint_id', route.endpoint).eq('is_active', true).single(),
   ]);
   const dossier = dossiers?.find((entry) => entry.id === input.vehicleDossierId);
   if (dossierError || !dossiers || !dossier || dossiers.length !== dossierIds.length) throw new HttpError(422, 'Choisissez des dossiers véhicule de votre marque.');
@@ -54,6 +54,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   if (modelError || !model || model.adapter_family !== route.adapterFamily) throw new HttpError(503, `Le modèle ${route.label} n’est pas activé dans la configuration fal.`);
   if (!model.pricing_verified_at || Date.now() - new Date(model.pricing_verified_at).getTime() > 7 * 24 * 60 * 60 * 1000) throw new HttpError(503, `Le tarif de ${route.label} doit être vérifié et daté avant tout lancement.`);
   if (!model.allowed_formats?.includes(input.format)) throw new HttpError(422, `${route.label} ne prend pas en charge le format ${input.format}.`);
+  if (generationShots.some((shot) => !model.allowed_durations?.includes(shot.durationSeconds))) throw new HttpError(422, `La durée d’un clip n’est pas prise en charge par ${route.label}. Réduisez le nombre de plans ou choisissez une autre durée totale.`);
   if (input.audioAssetId) throw new HttpError(422, 'Les vidéos multi-plans sont sans audio pour le moment.');
 
   const curatedPlaces = input.placeIds.map(findCuratedLocation).filter((place) => place !== undefined);

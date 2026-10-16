@@ -20,6 +20,28 @@ export function getStoryboardClipBudget(clipDurationS: number): number | null {
   return clipDurationS;
 }
 
+/** Returns provider-safe segment lengths for a selected total footage duration. */
+export function getReferenceClipDurations(mode: StoryboardMode, totalDurationS: number, allowedDurations?: number[] | null): number[] {
+  const route = getStoryboardModeRoute(mode);
+  const allowed = allowedDurations ? new Set(allowedDurations) : null;
+  if (getStoryboardClipBudget(totalDurationS) === null) return [];
+  const minCount = Math.ceil(totalDurationS / route.maxClipDurationS);
+  const maxCount = Math.floor(totalDurationS / route.minClipDurationS);
+  for (let count = minCount; count <= maxCount; count += 1) {
+    const base = Math.floor(totalDurationS / count);
+    const remainder = totalDurationS % count;
+    const segments = Array.from({ length: count }, (_, index) => base + Number(index < remainder));
+    if (segments.every((seconds) => seconds >= route.minClipDurationS && seconds <= route.maxClipDurationS && (!allowed || allowed.has(seconds)))) return segments;
+  }
+  return [];
+}
+
+/** UI durations are total footage; endpoints may receive several shorter clips. */
+export function getSupportedReferenceDurations(mode: StoryboardMode, allowedDurations: number[] | null | undefined): number[] {
+  if (!allowedDurations?.length) return [];
+  return ([5, 10, 15, 20] as const).filter((total) => getReferenceClipDurations(mode, total, allowedDurations).length > 0);
+}
+
 export function areStoryboardClipDurationsValid(mode: StoryboardMode, clipDurationS: number, clipDurationsS: number[]): boolean {
   const route = getStoryboardModeRoute(mode);
   const clipBudget = getStoryboardClipBudget(clipDurationS);
