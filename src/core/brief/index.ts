@@ -16,7 +16,7 @@ export const briefSchema = z.object({
   camera_movement: z.string().trim().max(160).default('slow tracking shot'),
   mood: z.string().trim().max(160).default('confident'),
   format: z.enum(['16:9', '9:16', '1:1', '4:5']).default('16:9'),
-  duration_s: z.union([z.literal(5), z.literal(6), z.literal(10), z.literal(15), z.literal(20), z.literal(30)]).default(5),
+  duration_s: z.number().int().min(2).max(30).default(5),
   complexity: z.enum(['simple', 'balanced', 'rich']).default('simple'),
 });
 export type Brief = z.infer<typeof briefSchema>;

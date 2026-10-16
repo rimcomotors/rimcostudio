@@ -3,7 +3,7 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
 import { calculateClientPriceFcfa } from '@/core/pricing';
-import { getRouteForGeneration, getRoutedDurations, isModelOnRoute, type GenerationTier } from '@/core/providers/model-routing';
+import { getRouteForGeneration, getRoutedDurations, isModelOnRoute, REFERENCE_MODEL_ENDPOINTS, type GenerationTier } from '@/core/providers/model-routing';
 
 export async function GET() {
   try {
@@ -25,8 +25,20 @@ export async function GET() {
           return [duration, calculateClientPriceFcfa((route?.sourceDuration ?? duration) * Number(model.price_usd_per_second), env.USD_TO_EUR_RATE, env.EUR_TO_FCFA)] as const;
         }),
       ]);
-      return [{ id: model.id, name: model.name, tier: model.tier, adapterFamily: model.adapter_family, formats: model.allowed_formats, durations, estimatedPricesFcfa, isDefault: model.is_default }];
+      return [{ id: model.id, name: model.name, tier: model.tier, adapterFamily: model.adapter_family, formats: model.allowed_formats, durations, estimatedPricesFcfa, isDefault: model.is_default, isReference: false }];
     });
-    return NextResponse.json({ models });
+    const referenceModels = (data ?? []).flatMap((model) => {
+      if (model.tier !== 'standard' && model.tier !== 'pro' && model.tier !== 'premium') return [];
+      const tier = model.tier as GenerationTier;
+      if (model.fal_endpoint_id !== REFERENCE_MODEL_ENDPOINTS[tier] || !model.allowed_durations?.includes(5) || !model.allowed_formats?.includes('16:9')) return [];
+      const durations = (model.allowed_durations as number[]).filter((duration) => {
+        if (tier === 'standard') return duration >= 2 && duration <= 10;
+        if (tier === 'pro') return duration >= 3 && duration <= 15;
+        return duration >= 4 && duration <= 30;
+      });
+      const estimatedPricesFcfa = Object.fromEntries(durations.map((duration) => [duration, calculateClientPriceFcfa(duration * Number(model.price_usd_per_second), env.USD_TO_EUR_RATE, env.EUR_TO_FCFA)]));
+      return [{ id: model.id, name: model.name, tier, adapterFamily: model.adapter_family, formats: model.allowed_formats, durations, estimatedPricesFcfa, isDefault: false, isReference: true }];
+    });
+    return NextResponse.json({ models: [...models, ...referenceModels] });
   } catch (error) { return errorResponse(error); }
 }

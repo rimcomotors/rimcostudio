@@ -23,7 +23,7 @@ const providers: Record<'wan' | 'kling' | 'seedance', ReferenceVideoProvider> = 
   wan: wanReferenceVideoProvider, kling: klingReferenceVideoProvider, seedance: seedanceReferenceVideoProvider,
 };
 
-export async function createLiveStoryboard(actor: Actor, input: CreateVersionInput & { storyboard: StoryboardShot[]; storyMode: 'standard' | 'pro' | 'premium'; finalDurationSeconds: 15 | 20; vehicleDossierId: string; placeIds: string[]; purpose: 'presentation' | 'advertising'; storyboardLedgerIds?: string[]; comparisonCampaignId?: string }) {
+export async function createLiveStoryboard(actor: Actor, input: CreateVersionInput & { storyboard: StoryboardShot[]; storyMode: 'standard' | 'pro' | 'premium'; finalDurationSeconds: 15 | 20; vehicleDossierId: string; vehicleDossierIds: string[]; placeIds: string[]; purpose: 'presentation' | 'advertising'; storyboardLedgerIds?: string[]; comparisonCampaignId?: string }) {
   if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
 
   const authenticated = await createSupabaseServerClient();
@@ -31,12 +31,17 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const route = getStoryboardModeRoute(input.storyMode);
   const provider = providers[route.adapterFamily];
   validateStoryboard(input.storyboard, input.finalDurationSeconds, route.adapterFamily);
-  const [{ data: dossier, error: dossierError }, { data: model, error: modelError }] = await Promise.all([
-    authenticated.from('vehicle_dossiers').select('id,make,model,color,variant,brand_id,assets(id,kind,path,title,angle,photo_role,status)').eq('id', input.vehicleDossierId).eq('brand_id', actor.brandId).single(),
+  const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
+  const [{ data: dossiers, error: dossierError }, { data: model, error: modelError }] = await Promise.all([
+    authenticated.from('vehicle_dossiers').select('id,make,model,color,variant,brand_id,assets(id,kind,path,title,angle,photo_role,status)').in('id', dossierIds).eq('brand_id', actor.brandId),
     admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,price_usd_per_second,pricing_verified_at,allowed_formats,is_active').eq('fal_endpoint_id', route.endpoint).eq('is_active', true).single(),
   ]);
-  if (dossierError || !dossier) throw new HttpError(422, 'Choisissez un dossier véhicule de votre marque.');
-  const vehiclePhotos = (dossier.assets ?? []).filter((asset) => asset.kind === 'vehicle' && asset.status === 'validée');
+  const dossier = dossiers?.find((entry) => entry.id === input.vehicleDossierId);
+  if (dossierError || !dossiers || !dossier || dossiers.length !== dossierIds.length) throw new HttpError(422, 'Choisissez des dossiers véhicule de votre marque.');
+  const normalize = (value: string | null) => (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('fr');
+  const identity = (entry: typeof dossier) => [entry.make, entry.model, entry.color, entry.variant].map(normalize).join('|');
+  if (new Set(dossiers.map(identity)).size !== 1) throw new HttpError(422, 'Les dossiers regroupés doivent décrire exactement le même véhicule.');
+  const vehiclePhotos = dossiers.flatMap((entry) => entry.assets ?? []).filter((asset) => asset.kind === 'vehicle' && asset.status === 'validée');
   const asset = vehiclePhotos.find((photo) => photo.id === input.assetId) ?? vehiclePhotos[0];
   if (!asset) throw new HttpError(422, 'Le dossier ne contient aucune photo validée.');
   if (modelError || !model || model.adapter_family !== route.adapterFamily) throw new HttpError(503, `Le modèle ${route.label} n’est pas activé dans la configuration fal.`);

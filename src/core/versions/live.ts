@@ -19,7 +19,12 @@ import { calculateClientPriceFcfa } from '@/core/pricing';
 import { refreshLiveStoryboard } from './storyboard-live';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { reserveGenerationCost, reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
-import { getRouteForGeneration } from '@/core/providers/model-routing';
+import { getRouteForGeneration, REFERENCE_MODEL_ENDPOINTS } from '@/core/providers/model-routing';
+import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider } from '@/core/providers/fal-reference-video';
+import { findCuratedLocation, locationCatalog } from '@/core/assets/location-catalog';
+import { createFalClient } from '@fal-ai/client';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
@@ -30,9 +35,11 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const authenticated = await createSupabaseServerClient();
   const admin = createStorageAdminClient();
   const expectedTier = input.tier;
-  const route = input.tier === 'standard' || input.tier === 'pro' || input.tier === 'premium' ? getRouteForGeneration(input.tier, input.durationS) : null;
-  if (!route) throw new HttpError(422, 'Cette combinaison de niveau et de durée n’est pas disponible.');
-  const expectedEndpoint = route.endpoint;
+  const referenceMode = input.vehiclePhotoIds.length > 1 || Boolean(input.locationAssetId);
+  if (referenceMode && input.tier === 'test') throw new HttpError(422, 'Le mode de test ne prend pas en charge plusieurs images de référence.');
+  const route = !referenceMode && (input.tier === 'standard' || input.tier === 'pro' || input.tier === 'premium') ? getRouteForGeneration(input.tier, input.durationS) : null;
+  if (!referenceMode && !route) throw new HttpError(422, 'Cette combinaison de niveau et de durée n’est pas disponible.');
+  const expectedEndpoint = referenceMode ? REFERENCE_MODEL_ENDPOINTS[input.tier as 'standard' | 'pro' | 'premium'] : route!.endpoint;
   const [{ data: asset, error: assetError }, { data: model, error: modelError }] = await Promise.all([
     authenticated.from('assets').select('id,kind,path,make,model,color,status,brand_id').eq('id', input.assetId).single(),
     admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,mode,price_usd_per_second,allowed_durations,allowed_formats,is_active,is_default').eq(options?.modelId ? 'id' : 'fal_endpoint_id', options?.modelId ?? expectedEndpoint).eq('is_active', true).single(),
@@ -43,36 +50,79 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     if (audioError || !audio || audio.kind !== 'audio' || audio.status !== 'validée' || audio.brand_id !== actor.brandId) throw new HttpError(422, 'Choisissez une piste audio validée pour votre marque.');
   }
   if (modelError || !model || !['kling','wan','veo','seedance'].includes(model.adapter_family)) throw new HttpError(503, 'Le modèle demandé n’est pas activé ou ne dispose pas d’un adaptateur live.');
-  const endpointMatches = model.adapter_family === 'kling' && model.fal_endpoint_id === KLING_ENDPOINT
+  const referenceAdapter = model.fal_endpoint_id === REFERENCE_MODEL_ENDPOINTS.standard && model.adapter_family === 'wan'
+    ? wanReferenceVideoProvider
+    : model.fal_endpoint_id === REFERENCE_MODEL_ENDPOINTS.pro && model.adapter_family === 'kling'
+      ? klingReferenceVideoProvider
+      : model.fal_endpoint_id === REFERENCE_MODEL_ENDPOINTS.premium && model.adapter_family === 'seedance' ? seedanceReferenceVideoProvider : null;
+  if (referenceMode && (!referenceAdapter || input.durationS < referenceAdapter.minDurationS || input.durationS > referenceAdapter.maxDurationS)) throw new HttpError(422, 'Le modèle de référence ne prend pas en charge cette durée.');
+  const endpointMatches = Boolean(referenceAdapter) || model.adapter_family === 'kling' && model.fal_endpoint_id === KLING_ENDPOINT
     || model.adapter_family === 'wan' && model.fal_endpoint_id === WAN_ENDPOINT
     || model.adapter_family === 'veo' && model.fal_endpoint_id === VEO_ENDPOINT
     || model.adapter_family === 'seedance' && model.fal_endpoint_id === SEEDANCE_ENDPOINT;
   if (!endpointMatches) throw new HttpError(503, 'L’identifiant d’endpoint ne correspond pas à l’adaptateur vidéo activé.');
   if (model.fal_endpoint_id !== expectedEndpoint) throw new HttpError(422, 'Le modèle ne correspond pas au niveau et à la durée demandés.');
   if (options?.modelId && model.tier !== expectedTier) throw new HttpError(422, 'Le niveau demandé ne correspond pas au modèle sélectionné.');
-  const sourceDurationS = route.sourceDuration;
+  const sourceDurationS = referenceMode ? input.durationS : route!.sourceDuration;
   const storedDurations = model.allowed_durations ?? [];
-  const durationSupported = storedDurations.includes(input.durationS) || route.adapterFamily === 'veo' && storedDurations.includes(sourceDurationS);
+  const durationSupported = storedDurations.includes(input.durationS) || !referenceMode && route!.adapterFamily === 'veo' && storedDurations.includes(sourceDurationS);
   if (!durationSupported) throw new HttpError(422, 'La durée choisie n’est pas disponible pour ce modèle.');
   if (!model.allowed_formats?.includes(input.format)) throw new HttpError(422, `Le modèle ne prend pas en charge le format ${input.format}.`);
 
+  let referenceAssets: Array<{ id: string; path: string; angle?: string | null; photo_role?: string | null }> = [];
+  if (referenceMode) {
+    const requestedIds = [input.assetId, ...new Set(input.vehiclePhotoIds.filter((id) => id !== input.assetId))];
+    if (!requestedIds.includes(input.assetId)) throw new HttpError(422, 'La photo principale doit faire partie des vues du véhicule sélectionné.');
+    const dossierIds = [...new Set(input.vehicleDossierIds.length ? input.vehicleDossierIds : input.vehicleDossierId ? [input.vehicleDossierId] : [])];
+    if (input.vehicleDossierId && !dossierIds.includes(input.vehicleDossierId)) throw new HttpError(422, 'Le dossier principal doit faire partie des dossiers sélectionnés.');
+    if (dossierIds.length) {
+      const { data: dossiers, error: dossiersError } = await authenticated.from('vehicle_dossiers').select('id,make,model,color,variant,brand_id').in('id', dossierIds).eq('brand_id', actor.brandId);
+      const primary = dossiers?.find((dossier) => dossier.id === input.vehicleDossierId);
+      const normalize = (value: string | null) => (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('fr');
+      const identity = (dossier: NonNullable<typeof dossiers>[number]) => [dossier.make, dossier.model, dossier.color, dossier.variant].map(normalize).join('|');
+      if (dossiersError || !dossiers || dossiers.length !== dossierIds.length || !primary || new Set(dossiers.map(identity)).size !== 1) throw new HttpError(422, 'Les dossiers regroupés ne décrivent pas exactement le même véhicule.');
+    }
+    const { data: photos, error: photosError } = await authenticated.from('assets').select('id,path,angle,photo_role,kind,status,brand_id,vehicle_dossier_id,make,model,color,variant').in('id', requestedIds).eq('kind', 'vehicle').eq('status', 'validée').eq('brand_id', actor.brandId);
+    if (photosError || !photos || photos.length !== requestedIds.length) throw new HttpError(422, 'Une ou plusieurs vues véhicule ne sont plus disponibles.');
+    if (dossierIds.length && photos.some((photo) => !dossierIds.includes(photo.vehicle_dossier_id ?? ''))) throw new HttpError(422, 'Les photos sélectionnées ne proviennent pas des dossiers véhicule choisis.');
+    if (!dossierIds.length) {
+      const identity = (photo: typeof photos[number]) => [photo.make, photo.model, photo.color, photo.variant].map((value) => (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase()).join('|');
+      if (new Set(photos.map(identity)).size > 1) throw new HttpError(422, 'Les vues sélectionnées doivent appartenir au même véhicule.');
+    }
+    referenceAssets = requestedIds.map((id) => photos.find((photo) => photo.id === id)!).map((photo) => ({ id: photo.id, path: photo.path, angle: photo.angle, photo_role: photo.photo_role }));
+  }
   const { data: image, error: imageError } = await admin.storage.from('assets').createSignedUrl(asset.path, 3600);
   if (imageError || !image?.signedUrl) throw new HttpError(422, 'Impossible de préparer la photo sélectionnée.');
-  const vehicleDescription = [asset.make, asset.model, asset.color].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join(' ');
+  let dossierMetadata: { make: string | null; model: string | null; color: string | null; variant: string | null } | null = null;
+  if (input.vehicleDossierId) {
+    const { data: dossier, error: dossierError } = await authenticated.from('vehicle_dossiers').select('make,model,color,variant,brand_id').eq('id', input.vehicleDossierId).single();
+    if (dossierError || !dossier || dossier.brand_id !== actor.brandId) throw new HttpError(422, 'Le dossier véhicule sélectionné n’est plus disponible.');
+    dossierMetadata = dossier;
+  }
+  const vehicleMake = dossierMetadata?.make ?? asset.make;
+  const vehicleModel = dossierMetadata?.model ?? asset.model;
+  const vehicleColor = dossierMetadata?.color ?? asset.color;
+  const vehicleDescription = [vehicleMake, vehicleModel, dossierMetadata?.variant, vehicleColor].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join(' ');
   if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
   const selectedScene = input.scenePresetId ? getScenePreset(input.scenePresetId) : undefined;
   const conceptDirection = getSceneConceptDirection(selectedScene, input.conceptId);
   const userDirection = [conceptDirection, input.description].filter(Boolean).join(' ').slice(0, 500);
-  const briefOptions = { vehicle_asset_id: asset.id, vehicle_description: vehicleDescription || 'Véhicule strictement identique à la photo de référence', vehicle_category: inferVehicleCategory(asset.make, asset.model), scene_preset_id: input.scenePresetId, vehicle_action: selectedScene?.vehicleAction ?? input.vehicleAction, user_direction: userDirection, location: selectedScene?.location ?? input.location, setting: selectedScene?.setting ?? input.setting, character: input.character || selectedScene?.character || 'Aucun personnage', lighting: selectedScene?.lighting ?? input.lighting, camera_movement: selectedScene?.cameraMovement ?? input.cameraMovement, mood: selectedScene?.mood ?? input.mood, format: input.format, duration_s: input.durationS, complexity: input.complexity };
+  let selectedLocation: { id: string; title: string; path: string; location?: string; setting?: string } | undefined = input.locationAssetId ? findCuratedLocation(input.locationAssetId) : undefined;
+  if (input.locationAssetId && !selectedLocation) {
+    const { data: uploadedLocation, error: locationError } = await authenticated.from('assets').select('id,title,path,kind,status,brand_id').eq('id', input.locationAssetId).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId).single();
+    if (locationError || !uploadedLocation) throw new HttpError(422, 'Le lieu sélectionné n’est plus disponible.');
+    selectedLocation = { id: uploadedLocation.id, title: uploadedLocation.title ?? 'Lieu réel', path: uploadedLocation.path };
+  }
+  const briefOptions = { vehicle_asset_id: asset.id, vehicle_description: vehicleDescription || 'Véhicule strictement identique à la photo de référence', vehicle_category: inferVehicleCategory(vehicleMake, vehicleModel), scene_preset_id: input.scenePresetId, vehicle_action: selectedScene?.vehicleAction ?? input.vehicleAction, user_direction: userDirection, location: selectedLocation?.location ?? selectedScene?.location ?? input.location, setting: selectedLocation?.setting ?? selectedScene?.setting ?? input.setting, character: input.character || selectedScene?.character || 'Aucun personnage', lighting: selectedScene?.lighting ?? input.lighting, camera_movement: selectedScene?.cameraMovement ?? input.cameraMovement, mood: selectedScene?.mood ?? input.mood, format: input.format, duration_s: input.durationS, complexity: input.complexity };
   const llmBriefOptions = Object.fromEntries(Object.entries(briefOptions).map(([key, value]) => [key, String(value)]));
   const initialBrief = options?.reuse?.brief ?? buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', briefOptions);
   if (initialBrief.vehicle_asset_id !== asset.id || initialBrief.format !== input.format) throw new HttpError(422, 'Le brief commun ne correspond pas à la photo ou au format sélectionné.');
   const estimatedProviderCostUsd = sourceDurationS * Number(model.price_usd_per_second);
   const priceFcfa = calculateClientPriceFcfa(estimatedProviderCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
-  const videoTitle = input.title || `${asset.make ?? ''} ${asset.model ?? 'Véhicule'} · Nouvelle création`.trim();
+  const videoTitle = input.title || `${vehicleMake ?? ''} ${vehicleModel ?? 'Véhicule'} · Nouvelle création`.trim();
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: videoTitle, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: { ...initialBrief, overlayLogo: input.overlayLogo }, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
+  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: { ...initialBrief, overlayLogo: input.overlayLogo, ...(referenceMode ? { referenceVideoMode: true, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: referenceAssets.map((photo) => photo.id), locationAssetId: selectedLocation?.id ?? null } : {}) }, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
   if (versionError || !version) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
@@ -116,9 +166,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     brief = generated.brief as Brief;
     if (!model.allowed_formats?.includes(brief.format)) throw new HttpError(422, `Le modèle ne prend pas en charge le format ${brief.format}.`);
     prompt = briefToPrompt(brief, model.adapter_family);
+    if (referenceMode) prompt += `\n\nReference fidelity: all vehicle reference images show the same exact vehicle from complementary angles. Preserve its make, model, body shape, color, trim, wheels and visible details; do not redesign, recolor, or substitute it. ${selectedLocation ? `The final reference image is the required real location (${selectedLocation.title}); reproduce its visible architecture, road, vegetation and perspective faithfully as the background.` : ''}`;
     const { error: settleError } = await settleUsageCost(admin, { entryId: llmLedgerId, outcome: 'charged', actualCostUsd: generated.costUsd ?? llmReserveUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
     if (settleError) throw new HttpError(503, 'Le coût du brief LLM doit être réconcilié avant de lancer la vidéo.');
-    const { error: briefUpdateError } = await admin.from('video_versions').update({ brief_json: { ...brief, overlayLogo: input.overlayLogo }, generated_prompt: prompt }).eq('id', version.id);
+    const { error: briefUpdateError } = await admin.from('video_versions').update({ brief_json: { ...brief, overlayLogo: input.overlayLogo, ...(referenceMode ? { referenceVideoMode: true, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: referenceAssets.map((photo) => photo.id), locationAssetId: selectedLocation?.id ?? null } : {}) }, generated_prompt: prompt }).eq('id', version.id);
     if (briefUpdateError) throw new HttpError(503, 'Le brief est facturé mais n’a pas pu être enregistré. Réessayez depuis l’administration.');
   } catch (briefError) {
     const message = briefError instanceof HttpError ? briefError.message : 'Le brief n’a pas pu être préparé. Vérifiez le fournisseur LLM puis réessayez.';
@@ -146,8 +197,33 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
 
   let requestId: string;
   try {
-    const provider = model.adapter_family === 'wan' ? wanVideoProvider : model.adapter_family === 'veo' ? veoVideoProvider : model.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
-    ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6 | 10 | 15 | 20 | 30, format: input.format, endUserId: actor.id }));
+    if (referenceMode && referenceAdapter) {
+      const falStorage = env.FAL_KEY ? createFalClient({ credentials: env.FAL_KEY }).storage : null;
+      const refs = await Promise.all(referenceAssets.slice(0, Math.max(1, referenceAdapter.maxReferenceImages - (selectedLocation ? 1 : 0))).map(async (photo) => {
+        if (photo.id === asset.id && image.signedUrl) return image.signedUrl;
+        const { data: signed, error: signedError } = await admin.storage.from('assets').createSignedUrl(photo.path, 3600);
+        if (signedError || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer toutes les vues du véhicule.');
+        return signed.signedUrl;
+      }));
+      if (selectedLocation) {
+        if (selectedLocation.path.startsWith('/places/')) {
+          const curated = locationCatalog.find((item) => item.id === selectedLocation!.id);
+          if (!curated || !falStorage) throw new HttpError(422, 'Impossible de préparer la référence du lieu.');
+          const bytes = await readFile(join(process.cwd(), 'public', curated.path.slice(1)));
+          const extension = curated.path.split('.').at(-1)?.toLowerCase();
+          const mimeType = extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg';
+          refs.push(await falStorage.upload(new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: mimeType }), { lifecycle: { expiresIn: '1d' } }));
+        } else {
+          const { data: signed, error: signedError } = await admin.storage.from('assets').createSignedUrl(selectedLocation.path, 3600);
+          if (signedError || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer la référence du lieu.');
+          refs.push(signed.signedUrl);
+        }
+      }
+      ({ requestId } = await referenceAdapter.submit({ prompt, referenceImageUrls: refs, durationS: input.durationS, aspectRatio: input.format, endUserId: actor.id }));
+    } else {
+      const provider = model.adapter_family === 'wan' ? wanVideoProvider : model.adapter_family === 'veo' ? veoVideoProvider : model.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
+      ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6 | 10 | 15 | 20 | 30, format: input.format, endUserId: actor.id }));
+    }
   } catch {
     await Promise.all([
       settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
@@ -172,7 +248,7 @@ function acceptedFalUrl(rawUrl: string): URL | null {
 
 export async function refreshLiveVersion(versionId: string, actor: Actor) {
   const admin = createStorageAdminClient();
-  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,status,raw_path,final_path,updated_at,brief_json,model:ai_models!inner(adapter_family),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
+  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,status,raw_path,final_path,updated_at,brief_json,model:ai_models!inner(adapter_family,fal_endpoint_id),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   const ownsVideo = video?.user_id === actor.id;
@@ -203,7 +279,10 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   }
   if (!version.provider_request_id) throw new HttpError(409, 'La demande de génération n’a pas encore été enregistrée.');
   const model = Array.isArray(version.model) ? version.model[0] : version.model;
-  const provider = model?.adapter_family === 'wan' ? wanVideoProvider : model?.adapter_family === 'veo' ? veoVideoProvider : model?.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
+  const referenceMode = Boolean(version.brief_json && typeof version.brief_json === 'object' && 'referenceVideoMode' in version.brief_json);
+  const provider = referenceMode
+    ? model?.fal_endpoint_id === REFERENCE_MODEL_ENDPOINTS.standard ? wanReferenceVideoProvider : model?.fal_endpoint_id === REFERENCE_MODEL_ENDPOINTS.pro ? klingReferenceVideoProvider : seedanceReferenceVideoProvider
+    : model?.adapter_family === 'wan' ? wanVideoProvider : model?.adapter_family === 'veo' ? veoVideoProvider : model?.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
   const status = await provider.status(version.provider_request_id);
   let rawPath = version.raw_path as string | null;
   if (status.status === 'ready' && status.videoUrl) {

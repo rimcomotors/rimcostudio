@@ -8,6 +8,12 @@ export const MODEL_ENDPOINTS = {
   seedance: 'bytedance/seedance-2.5/image-to-video',
 } as const;
 
+export const REFERENCE_MODEL_ENDPOINTS = {
+  standard: 'fal-ai/wan/v2.7/reference-to-video',
+  pro: 'fal-ai/kling-video/o3/pro/reference-to-video',
+  premium: 'bytedance/seedance-2.5/reference-to-video',
+} as const;
+
 /** Matrice métier verrouillée : l’interface et l’API doivent suivre cette table. */
 export const LOCKED_MODEL_POLICY = [
   { tier: 'standard', duration: 5, model: 'Wan 3.0' },

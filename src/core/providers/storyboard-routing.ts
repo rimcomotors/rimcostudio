@@ -1,17 +1,13 @@
-import {
-  KLING_REFERENCE_ENDPOINT,
-  SEEDANCE_REFERENCE_ENDPOINT,
-  WAN_REFERENCE_ENDPOINT,
-} from './fal-reference-video';
+import { REFERENCE_MODEL_ENDPOINTS } from './model-routing';
 
 /** New multi-clip storyboard modes; intentionally separate from legacy tiers. */
 export type StoryboardMode = 'standard' | 'pro' | 'premium';
 export type StoryboardFinalDuration = 15 | 20;
 
 export const STORYBOARD_MODE_ROUTES = {
-  standard: { label: 'Standard', adapterFamily: 'wan', endpoint: WAN_REFERENCE_ENDPOINT, minClipDurationS: 2, maxClipDurationS: 10, maxReferenceImages: 20 },
-  pro: { label: 'Pro', adapterFamily: 'kling', endpoint: KLING_REFERENCE_ENDPOINT, minClipDurationS: 3, maxClipDurationS: 15, maxReferenceImages: 4 },
-  premium: { label: 'Premium', adapterFamily: 'seedance', endpoint: SEEDANCE_REFERENCE_ENDPOINT, minClipDurationS: 4, maxClipDurationS: 30, maxReferenceImages: 30 },
+  standard: { label: 'Standard', adapterFamily: 'wan', endpoint: REFERENCE_MODEL_ENDPOINTS.standard, minClipDurationS: 2, maxClipDurationS: 10, maxReferenceImages: 20 },
+  pro: { label: 'Pro', adapterFamily: 'kling', endpoint: REFERENCE_MODEL_ENDPOINTS.pro, minClipDurationS: 3, maxClipDurationS: 15, maxReferenceImages: 4 },
+  premium: { label: 'Premium', adapterFamily: 'seedance', endpoint: REFERENCE_MODEL_ENDPOINTS.premium, minClipDurationS: 4, maxClipDurationS: 30, maxReferenceImages: 30 },
 } as const;
 
 export function getStoryboardModeRoute(mode: StoryboardMode) {

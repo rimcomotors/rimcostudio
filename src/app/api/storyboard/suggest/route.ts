@@ -14,6 +14,7 @@ import { calculateClientPriceFcfa } from '@/core/pricing';
 
 const requestSchema = z.object({
   vehicleDossierId: z.string().uuid(),
+  vehicleDossierIds: z.array(z.string().uuid()).max(20).default([]),
   placeIds: z.array(z.string().uuid()).max(12).default([]),
   mode: z.enum(['standard', 'pro', 'premium']),
   durationSeconds: z.union([z.literal(15), z.literal(20)]),
@@ -28,11 +29,16 @@ export async function POST(request: Request) {
     if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
     const input = requestSchema.parse(await request.json());
     const supabase = await createSupabaseServerClient();
-    const { data: dossier, error: dossierError } = await supabase.from('vehicle_dossiers')
+    const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
+    const { data: dossiers, error: dossierError } = await supabase.from('vehicle_dossiers')
       .select('id,make,model,color,variant,brand_id,assets(id,title,angle,photo_role,path,status,kind)')
-      .eq('id', input.vehicleDossierId).eq('brand_id', actor.brandId).single();
-    if (dossierError || !dossier) throw new HttpError(404, 'Dossier véhicule introuvable.');
-    const vehiclePhotos = (dossier.assets ?? []).filter((asset) => asset.kind === 'vehicle' && asset.status === 'validée');
+      .in('id', dossierIds).eq('brand_id', actor.brandId);
+    const dossier = dossiers?.find((entry) => entry.id === input.vehicleDossierId);
+    if (dossierError || !dossier || !dossiers || dossiers.length !== dossierIds.length) throw new HttpError(404, 'Dossier véhicule introuvable.');
+    const normalize = (value: string | null) => (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('fr');
+    const identity = (entry: typeof dossier) => [entry.make, entry.model, entry.color, entry.variant].map(normalize).join('|');
+    if (new Set(dossiers.map(identity)).size !== 1) throw new HttpError(422, 'Les dossiers regroupés doivent décrire exactement le même véhicule.');
+    const vehiclePhotos = dossiers.flatMap((entry) => entry.assets ?? []).filter((asset) => asset.kind === 'vehicle' && asset.status === 'validée');
     if (!vehiclePhotos.length) throw new HttpError(422, 'Ce dossier ne contient pas encore de photo validée.');
 
     let places: Array<{ id: string; title: string | null; category: string | null; path: string }> = [];
