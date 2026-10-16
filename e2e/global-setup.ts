@@ -34,13 +34,18 @@ export default async function globalSetup() {
     if (error) throw new Error(`Impossible de préparer le profil ${role} pour E2E: ${error.message}`);
   }
 
+  const { data: dossier, error: dossierError } = await supabase.from('vehicle_dossiers').insert({
+    make: 'Haval', model: 'H6', color: 'Bleu nuit', variant: 'GT', brand_id: brand.id, created_by: admin.id,
+  }).select('id').single();
+  if (dossierError || !dossier) throw dossierError ?? new Error('Le dossier véhicule E2E est absent.');
+
   const path = `${admin.id}/${crypto.randomUUID()}-vehicle.png`;
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/xa8AAAAASUVORK5CYII=', 'base64');
   const { error: uploadError } = await supabase.storage.from('assets').upload(path, png, { contentType: 'image/png' });
   if (uploadError) throw uploadError;
   const { error: assetError } = await supabase.from('assets').insert({
     kind: 'vehicle', path, make: 'Haval', model: 'H6', color: 'Bleu nuit', angle: 'Avant trois-quarts',
-    status: 'validée', brand_id: brand.id, created_by: admin.id,
+    status: 'validée', brand_id: brand.id, created_by: admin.id, vehicle_dossier_id: dossier.id, photo_role: 'exterior',
   });
   if (assetError) throw assetError;
 }
