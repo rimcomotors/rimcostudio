@@ -6,7 +6,7 @@ import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
 import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, getSingleShotClipDurations, singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
-import { createFalLlmProvider } from '@/core/providers/fal-llm';
+import { createFalLlmProvider, FalLlmBriefError } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
 import { findCuratedLocation } from '@/core/assets/location-catalog';
@@ -26,6 +26,7 @@ const storyboardResponseSchema = z.object({ shots: storyboardSchema }).strict();
 const singleShotStoryboardResponseSchema = z.object({ shots: singleShotStoryboardSchema }).strict();
 
 export async function POST(request: Request) {
+  const referenceId = crypto.randomUUID();
   try {
     const actor = await getActor();
     if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
@@ -120,7 +121,19 @@ export async function POST(request: Request) {
         const { error: settleError } = await settleUsageCost(admin, { entryId: reservation, outcome: 'charged', actualCostUsd: storyboardCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
         if (settleError) throw new HttpError(503, 'Le coût du storyboard n’a pas pu être clôturé.');
       } catch (cause) {
-        await settleUsageCost(admin, { entryId: reservation, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
+        const failedLlm = cause instanceof FalLlmBriefError ? cause : null;
+        const actualFailureCostUsd = failedLlm
+          ? failedLlm.reportedCostUsd ?? (failedLlm.completedRequests > 0 ? 0.02 : 0)
+          : storyboardCostUsd;
+        const { error: settlementError } = await settleUsageCost(admin, {
+          entryId: reservation,
+          outcome: actualFailureCostUsd > 0 ? 'charged' : 'released',
+          actualCostUsd: actualFailureCostUsd,
+          usdToEur: env.USD_TO_EUR_RATE,
+          eurToFcfa: env.EUR_TO_FCFA,
+          billable: false,
+        });
+        if (settlementError) console.error(`[storyboard-suggest:${referenceId}] Échec de clôture de la réservation LLM.`);
         throw cause;
       }
     }
@@ -132,5 +145,21 @@ export async function POST(request: Request) {
       throw new HttpError(422, 'Le storyboard référence une image non autorisée. Régénérez la proposition.');
     }
     return NextResponse.json({ storyboard: shots, prompt: instruction, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
-  } catch (error) { return errorResponse(error); }
+  } catch (error) {
+    if (error instanceof HttpError) return errorResponse(error);
+    if (error instanceof z.ZodError) return NextResponse.json({ error: 'Certains choix ont changé. Vérifiez les options du Studio puis réessayez.' }, { status: 422 });
+    const providerCause = error instanceof FalLlmBriefError ? error.providerCause : undefined;
+    const detail = (cause: unknown) => {
+      const message = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause ?? 'Erreur inconnue');
+      return env.FAL_KEY ? message.replaceAll(env.FAL_KEY, '[masqué]') : message;
+    };
+    console.error(`[storyboard-suggest:${referenceId}]`, {
+      error: detail(error),
+      ...(providerCause ? { provider: detail(providerCause) } : {}),
+    });
+    return NextResponse.json({
+      error: 'Le service IA n’a pas pu préparer le storyboard. Aucune vidéo n’a été lancée. Réessayez; si le problème persiste, communiquez cette référence au support.',
+      referenceId,
+    }, { status: 502 });
+  }
 }

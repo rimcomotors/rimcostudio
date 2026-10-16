@@ -33,7 +33,6 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const isSingleShot = input.workflow === 'single';
   if (isSingleShot) validateSingleShotStoryboard(input.storyboard, input.clipDurationSeconds, route.adapterFamily);
   else {
-    if (input.clipDurationSeconds !== 15 && input.clipDurationSeconds !== 20) throw new HttpError(422, 'Le workflow multi-plans propose 15 ou 20 secondes de clips.');
     validateStoryboard(input.storyboard, input.clipDurationSeconds, route.adapterFamily);
   }
   const generationShots = isSingleShot

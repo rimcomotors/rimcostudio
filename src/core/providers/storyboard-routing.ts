@@ -2,7 +2,7 @@ import { REFERENCE_MODEL_ENDPOINTS } from './model-routing';
 
 /** New multi-clip storyboard modes; intentionally separate from legacy tiers. */
 export type StoryboardMode = 'standard' | 'pro' | 'premium';
-export type StoryboardClipDuration = 15 | 20;
+export type StoryboardClipDuration = 5 | 10 | 15 | 20;
 
 export const STORYBOARD_MODE_ROUTES = {
   standard: { label: 'Standard', adapterFamily: 'wan', endpoint: REFERENCE_MODEL_ENDPOINTS.standard, minClipDurationS: 2, maxClipDurationS: 10, maxReferenceImages: 20 },
@@ -16,7 +16,7 @@ export function getStoryboardModeRoute(mode: StoryboardMode) {
 
 /** Multi-clip choices describe generated footage; the end card adds two seconds. */
 export function getStoryboardClipBudget(clipDurationS: number): number | null {
-  if (clipDurationS !== 15 && clipDurationS !== 20) return null;
+  if (clipDurationS !== 5 && clipDurationS !== 10 && clipDurationS !== 15 && clipDurationS !== 20) return null;
   return clipDurationS;
 }
 

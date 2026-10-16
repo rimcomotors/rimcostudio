@@ -23,13 +23,16 @@ const deleteSchema = z.object({ videoIds: z.array(z.string().uuid()).min(1).max(
 const multiClipSchema = requestSchema.extend({
   workflow: z.literal('multi_clip'),
   storyMode: z.enum(['standard', 'pro', 'premium']),
-  clipDurationSeconds: z.union([z.literal(15), z.literal(20)]),
+  clipDurationSeconds: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
   purpose: z.enum(['presentation', 'advertising']),
   vehicleDossierId: z.string().uuid(),
   placeIds: z.array(z.string().uuid()).max(12).default([]),
   storyboardLedgerIds: z.array(z.string().uuid()).max(20).default([]),
   storyboard: storyboardSchema,
-}).strict();
+}).strict().refine((input) => input.clipDurationSeconds >= 10 || input.placeIds.length <= 1, {
+  message: 'Une seule référence de lieu est autorisée pour une vidéo de moins de 10 secondes.',
+  path: ['placeIds'],
+});
 const singleStoryboardSchema = requestSchema.extend({
   workflow: z.literal('single_storyboard'),
   storyMode: z.enum(['standard', 'pro', 'premium']),
@@ -39,7 +42,10 @@ const singleStoryboardSchema = requestSchema.extend({
   placeIds: z.array(z.string().uuid()).max(12).default([]),
   storyboardLedgerIds: z.array(z.string().uuid()).max(20).default([]),
   storyboard: singleShotStoryboardSchema,
-}).strict();
+}).strict().refine((input) => input.placeIds.length <= 1, {
+  message: 'Une vidéo en un seul plan utilise un seul lieu.',
+  path: ['placeIds'],
+});
 
 export async function GET(request: Request) {
   try {

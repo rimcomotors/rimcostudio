@@ -7,7 +7,12 @@ import type { LlmProvider } from './contracts';
 
 export const FAL_LLM_ENDPOINT = 'openrouter/router';
 export class FalLlmBriefError extends Error {
-  constructor(message: string, readonly completedRequests: number, readonly reportedCostUsd: number | null) {
+  constructor(
+    message: string,
+    readonly completedRequests: number,
+    readonly reportedCostUsd: number | null,
+    readonly providerCause?: unknown,
+  ) {
     super(message);
     this.name = 'FalLlmBriefError';
   }
@@ -56,8 +61,8 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
     let response: unknown;
     try {
       response = await call(request, instructions);
-    } catch {
-      throw new FalLlmBriefError('L’appel au fournisseur LLM a échoué.', completedRequests, hasReportedCost ? costUsd : null);
+    } catch (providerCause) {
+      throw new FalLlmBriefError('L’appel au fournisseur LLM a échoué.', completedRequests, hasReportedCost ? costUsd : null, providerCause);
     }
     completedRequests += 1;
     const reportedCost = responseCost(response);
