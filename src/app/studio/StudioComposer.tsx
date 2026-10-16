@@ -52,6 +52,9 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [vehicleDossierId, setVehicleDossierId] = useState('');
   const [placeIds, setPlaceIds] = useState<string[]>([]);
   const [storyboard, setStoryboard] = useState<StoryShot[]>([]);
+  const [storyboardLedgerIds, setStoryboardLedgerIds] = useState<string[]>([]);
+  const [storyboardCostFcfa, setStoryboardCostFcfa] = useState<number | null>(null);
+  const [multiClipEstimatedPriceFcfa, setMultiClipEstimatedPriceFcfa] = useState<number | null>(null);
   const [storyboardBusy, setStoryboardBusy] = useState(false);
   const [comparisonCampaignId, setComparisonCampaignId] = useState('');
   const [comparisonJobs, setComparisonJobs] = useState<ComparisonJob[]>([]);
@@ -199,7 +202,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         if (!firstPhoto) throw new Error('Ajoutez au moins une photo validée dans le dossier véhicule.');
         const response = await fetch('/api/versions', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ workflow: 'multi_clip', description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId, placeIds, storyMode, finalDurationSeconds, purpose, storyboard, format: '16:9', tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }),
+          body: JSON.stringify({ workflow: 'multi_clip', description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId, placeIds, storyMode, finalDurationSeconds, purpose, storyboard, storyboardLedgerIds, format: '16:9', tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }),
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error ?? 'Le montage multi-plans n’a pas pu démarrer.');
@@ -237,6 +240,9 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Le storyboard n’a pas pu être proposé.');
       setStoryboard(data.storyboard ?? []);
+      setStoryboardLedgerIds(data.storyboardLedgerId ? [data.storyboardLedgerId] : []);
+      setStoryboardCostFcfa(typeof data.storyboardCostFcfa === 'number' ? data.storyboardCostFcfa : null);
+      setMultiClipEstimatedPriceFcfa(typeof data.totalEstimatedPriceFcfa === 'number' ? data.totalEstimatedPriceFcfa : null);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Le storyboard n’a pas pu être proposé.'); }
     finally { setStoryboardBusy(false); }
   }
@@ -321,7 +327,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
           {mode === 'live' && <div className="mt-4 rounded-md bg-[#f8f7f4] px-3 py-2.5 text-[10px] text-[#716d66]">{modelsLoading ? <p role="status">Chargement des modèles…</p> : modelsError ? <p role="alert">{modelsError}</p> : <p>Modèle prévu : <b>{routedModel?.name ?? 'Aucun modèle compatible'}</b></p>}</div>}
           {mode === 'mock' && <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Simulation active : aucune vidéo payante ne sera générée.</p>}
           {error && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-xs text-red-700">{error}</p>}
-          <div className="mt-4 border-t border-[#eeeae4] pt-4"><p className="text-[10px] text-[#88847d]">Estimation avant lancement</p><p className="mt-1 text-sm font-semibold">{priceLabel} <span className="text-[10px] font-normal text-[#88847d]">par génération · {durationS} s</span></p></div>
+          <div className="mt-4 border-t border-[#eeeae4] pt-4"><p className="text-[10px] text-[#88847d]">Estimation avant lancement</p><p className="mt-1 text-sm font-semibold">{multiClip ? multiClipEstimatedPriceFcfa != null ? `≈ ${formatFcfa(multiClipEstimatedPriceFcfa)}` : 'Générez le storyboard pour calculer le total' : priceLabel} <span className="text-[10px] font-normal text-[#88847d]">{multiClip ? 'storyboard + clips · logo inclus' : `par génération · ${durationS} s`}</span></p>{multiClip && storyboardCostFcfa != null && <p className="mt-1 text-[10px] text-[#88847d]">Dont préparation IA du storyboard : ≈ {formatFcfa(storyboardCostFcfa)}{storyboardLedgerIds.length > 1 ? ` · ${storyboardLedgerIds.length} propositions` : ''}</p>}</div>
           <button disabled={busy || generationActive || (multiClip ? !selectedDossier || storyboard.length < 2 : !assetId || mode === 'live' && (!routedModel || !estimatedPrice))} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="mt-4 w-full rounded-md bg-[#c51e1c] py-3 text-xs font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Préparation…' : generationActive ? 'Génération en cours…' : multiClip ? `Lancer ${storyMode === 'standard' ? 'Wan' : storyMode === 'pro' ? 'Kling' : 'Seedance'} · ${finalDurationSeconds} s` : 'Lancer la vidéo'}</button>
           {generationActive && <p id="generation-lock-message" role="status" className="mt-3 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Une génération est déjà en cours. Le bouton sera réactivé lorsque la vidéo sera prête.</p>}
         </section>}

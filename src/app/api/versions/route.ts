@@ -27,6 +27,7 @@ const multiClipSchema = requestSchema.extend({
   purpose: z.enum(['presentation', 'advertising']),
   vehicleDossierId: z.string().uuid(),
   placeIds: z.array(z.string().uuid()).max(12).default([]),
+  storyboardLedgerIds: z.array(z.string().uuid()).max(20).default([]),
   storyboard: storyboardSchema,
 }).strict();
 

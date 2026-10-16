@@ -10,6 +10,7 @@ import { createFalLlmProvider } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
 import { findCuratedLocation } from '@/core/assets/location-catalog';
+import { calculateClientPriceFcfa } from '@/core/pricing';
 
 const requestSchema = z.object({
   vehicleDossierId: z.string().uuid(),
@@ -56,6 +57,9 @@ export async function POST(request: Request) {
     });
 
     let shots: StoryboardShot[];
+    let storyboardLedgerId: string | null = null;
+    let storyboardCostUsd = 0;
+    let totalEstimatedPriceFcfa: number | null = null;
     if (env.PROVIDERS_MODE === 'mock') {
       const total = generatedVideoSeconds(input.durationSeconds);
       const durations = total === 13 ? [7, 6] : [9, 9];
@@ -69,14 +73,17 @@ export async function POST(request: Request) {
         vehiclePhotoId: selectedVehicle[index % selectedVehicle.length].id,
         locationPhotoId: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.id ?? null,
       })));
+      totalEstimatedPriceFcfa = 0;
     } else {
       if (!env.FAL_KEY || !env.LLM_MODEL) throw new HttpError(503, 'Le modèle de storyboard IA n’est pas configuré.');
       const admin = createStorageAdminClient();
+      const { data: videoModel } = await admin.from('ai_models').select('price_usd_per_second').eq('fal_endpoint_id', route.endpoint).eq('is_active', true).maybeSingle();
       const { data: reservation, error: reservationError } = await reserveLlmCost(admin, {
         userId: actor.id, department: actor.department, maxCostUsd: 0.02,
         usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
       });
       if (reservationError || !reservation) throw new HttpError(503, 'Impossible de réserver le coût de préparation du storyboard.');
+      storyboardLedgerId = reservation;
       try {
         const provider = createFalLlmProvider(async (prompt, system) => {
           const fal = createFalClient({ credentials: env.FAL_KEY! });
@@ -86,7 +93,12 @@ export async function POST(request: Request) {
         });
         const result = await provider.buildStoryboardWithCost(instruction, storyboardResponseSchema, 'You are an expert automotive commercial director. Return only JSON matching the requested schema. Use French for all creative text.');
         shots = result.fields.shots;
-        const { error: settleError } = await settleUsageCost(admin, { entryId: reservation, outcome: 'charged', actualCostUsd: result.costUsd ?? 0.02, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
+        storyboardCostUsd = result.costUsd ?? 0.02;
+        if (videoModel) {
+          const videoCostUsd = generatedVideoSeconds(input.durationSeconds) * Number(videoModel.price_usd_per_second);
+          totalEstimatedPriceFcfa = calculateClientPriceFcfa(videoCostUsd + storyboardCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
+        }
+        const { error: settleError } = await settleUsageCost(admin, { entryId: reservation, outcome: 'charged', actualCostUsd: storyboardCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
         if (settleError) throw new HttpError(503, 'Le coût du storyboard n’a pas pu être clôturé.');
       } catch (cause) {
         await settleUsageCost(admin, { entryId: reservation, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
@@ -99,6 +111,6 @@ export async function POST(request: Request) {
     if (shots.some((shot) => !vehicleIds.has(shot.vehiclePhotoId) || (shot.locationPhotoId && !placeIds.has(shot.locationPhotoId)))) {
       throw new HttpError(422, 'Le storyboard référence une image non autorisée. Régénérez la proposition.');
     }
-    return NextResponse.json({ storyboard: shots, prompt: instruction, mode: input.mode, durationSeconds: input.durationSeconds });
+    return NextResponse.json({ storyboard: shots, prompt: instruction, mode: input.mode, durationSeconds: input.durationSeconds, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
   } catch (error) { return errorResponse(error); }
 }

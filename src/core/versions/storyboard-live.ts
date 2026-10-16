@@ -23,7 +23,7 @@ const providers: Record<'wan' | 'kling' | 'seedance', ReferenceVideoProvider> = 
   wan: wanReferenceVideoProvider, kling: klingReferenceVideoProvider, seedance: seedanceReferenceVideoProvider,
 };
 
-export async function createLiveStoryboard(actor: Actor, input: CreateVersionInput & { storyboard: StoryboardShot[]; storyMode: 'standard' | 'pro' | 'premium'; finalDurationSeconds: 15 | 20; vehicleDossierId: string; placeIds: string[]; purpose: 'presentation' | 'advertising'; comparisonCampaignId?: string }) {
+export async function createLiveStoryboard(actor: Actor, input: CreateVersionInput & { storyboard: StoryboardShot[]; storyMode: 'standard' | 'pro' | 'premium'; finalDurationSeconds: 15 | 20; vehicleDossierId: string; placeIds: string[]; purpose: 'presentation' | 'advertising'; storyboardLedgerIds?: string[]; comparisonCampaignId?: string }) {
   if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
 
   const authenticated = await createSupabaseServerClient();
@@ -99,13 +99,33 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
   }
 
+  let storyboardCostUsd = 0;
+  const storyboardLedgerIds = input.storyboardLedgerIds ?? [];
+  if (storyboardLedgerIds.length) {
+    const { data: storyboardLedgers, error: storyboardLedgerError } = await admin.from('usage_ledger')
+      .select('id,cost_usd,status,version_id,user_id,ai_model_id')
+      .in('id', storyboardLedgerIds).eq('user_id', actor.id).eq('status', 'charged')
+      .is('version_id', null).is('ai_model_id', null);
+    if (storyboardLedgerError || !storyboardLedgers || storyboardLedgers.length !== storyboardLedgerIds.length) {
+      await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
+      throw new HttpError(422, 'Le coût du storyboard ne peut pas être associé à cette vidéo. Régénérez le storyboard.');
+    }
+    const { data: linkedLedger, error: linkError } = await admin.from('usage_ledger')
+      .update({ version_id: version.id }).in('id', storyboardLedgerIds).is('version_id', null).select('id');
+    if (linkError || !linkedLedger || linkedLedger.length !== storyboardLedgerIds.length) {
+      await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
+      throw new HttpError(409, 'Ce coût de storyboard est déjà associé à une autre vidéo. Régénérez le storyboard.');
+    }
+    storyboardCostUsd = storyboardLedgers.reduce((sum, row) => sum + Number(row.cost_usd), 0);
+  }
+
   const { data: ledgerId, error: reserveError } = await reserveGenerationCost(admin, {
     userId: actor.id, versionId: version.id, modelId: model.id, seconds: generatedSeconds,
     priceUsdPerSecond: Number(model.price_usd_per_second), usdToEur: env.USD_TO_EUR_RATE,
     eurToFcfa: env.EUR_TO_FCFA, priceFcfa, department: actor.department,
   });
   if (reserveError || !ledgerId) {
-    await Promise.all([admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
+    await Promise.all([admin.from('usage_ledger').update({ version_id: null }).eq('version_id', version.id).eq('status', 'charged'), admin.from('video_versions').delete().eq('id', version.id), admin.from('videos').delete().eq('id', video.id)]);
     throw new HttpError(503, 'Impossible d’enregistrer le suivi de coûts du montage.');
   }
 
@@ -168,7 +188,8 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     throw new HttpError(503, 'Aucun plan n’a pu démarrer. La réservation a été libérée.');
   }
   await admin.from('video_versions').update({ status: 'generating', updated_at: new Date().toISOString() }).eq('id', version.id);
-  return { id: version.id, status: 'generating' as const, prompt: prompts.join('\n\n--- Plan suivant ---\n\n'), estimatedPriceFcfa: priceFcfa, version: version.number, completedShots: 0, totalShots: input.storyboard.length };
+  const totalEstimatedPriceFcfa = calculateClientPriceFcfa(costUsd + storyboardCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
+  return { id: version.id, status: 'generating' as const, prompt: prompts.join('\n\n--- Plan suivant ---\n\n'), estimatedPriceFcfa: totalEstimatedPriceFcfa, storyboardCostUsd, version: version.number, completedShots: 0, totalShots: input.storyboard.length };
 }
 
 export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
@@ -216,7 +237,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const pendingShots = latestShots.some((shot) => ['queued','generating','postprocessing'].includes(shot.status));
   if (pendingShots) return { id: versionId, status: 'generating' as const, completedShots, totalShots: latestShots.length };
 
-  const { data: ledger, error: ledgerError } = await admin.from('usage_ledger').select('id,status').eq('version_id', versionId).eq('kind', 'generation').maybeSingle();
+  const { data: ledger, error: ledgerError } = await admin.from('usage_ledger').select('id,status').eq('version_id', versionId).eq('kind', 'generation').eq('ai_model_id', version.ai_model_id).maybeSingle();
   if (ledgerError) throw new HttpError(503, 'Impossible de clôturer le budget des plans.');
   const priceUsdPerSecond = Number(model.price_usd_per_second);
   if (ledger?.status === 'reserved') {
