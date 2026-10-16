@@ -72,7 +72,13 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     duration_s: input.finalDurationSeconds,
     complexity: input.complexity,
   });
-  const prompts = input.storyboard.map((shot, index) => shotToPrompt(brief, shot, index, input.storyboard.length, route.adapterFamily === 'seedance' ? '[' : '@'));
+  const prompts = input.storyboard.map((shot, index) => {
+    const reference = vehiclePhotos.find((photo) => photo.id === shot.vehiclePhotoId);
+    return shotToPrompt(brief, shot, index, input.storyboard.length, route.adapterFamily === 'seedance' ? '[' : '@', {
+      role: reference?.photo_role,
+      angle: reference?.angle,
+    });
+  });
   const generatedSeconds = generatedVideoSeconds(input.finalDurationSeconds);
   const costUsd = generatedSeconds * Number(model.price_usd_per_second);
   const priceFcfa = calculateClientPriceFcfa(costUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
@@ -130,7 +136,8 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
         if (!curated || !falStorage) throw new HttpError(422, 'La photo du lieu n’est pas une référence de la médiathèque.');
         if (!curatedUploads.has(path)) {
           curatedUploads.set(path, readFile(join(process.cwd(), 'public', path.slice(1))).then((bytes) => {
-            const mimeType = path.endsWith('.png') ? 'image/png' : 'image/jpeg';
+            const extension = path.split('.').at(-1)?.toLowerCase();
+            const mimeType = extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg';
             return falStorage.upload(new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: mimeType }), { lifecycle: { expiresIn: '1d' } });
           }));
         }

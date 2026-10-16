@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     const instruction = buildStoryboardInstruction({
       durationSeconds: input.durationSeconds, mode: input.mode,
       vehicle: [dossier.make, dossier.model, dossier.variant, dossier.color].filter(Boolean).join(' '),
-      vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? photo.angle ?? 'Photo véhicule' })),
+      vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? 'Photo véhicule', angle: photo.angle })),
       places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category })),
       purpose: input.purpose, direction: input.direction,
     });

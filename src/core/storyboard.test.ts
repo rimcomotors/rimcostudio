@@ -31,6 +31,6 @@ describe('storyboard', () => {
     expect(prompt).toContain('vehicle-front');
     expect(prompt).toContain('place-plateau');
     expect(prompt).toContain('shot 1 of 2');
-    expect(prompt).toContain('do not add titles, logos');
+    expect(prompt).toContain('Do not add titles, logos, captions, text, or transitions');
   });
 });
