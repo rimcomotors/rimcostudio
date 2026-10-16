@@ -13,13 +13,15 @@ if (mockWithoutSupabase) {
     await expect(page.getByText('Mode simulation', { exact: false })).toBeVisible();
     await expect(page.getByText('Durée de la vidéo')).toBeVisible();
     await expect(page.getByText('Niveau de génération')).toBeVisible();
-    await expect(page.getByRole('button', { name: /Haval H6/ })).toBeVisible();
+    await expect(page.getByLabel('Véhicule')).toBeVisible();
+    await expect(page.getByRole('option', { name: /Haval H6/ })).toBeAttached();
     await expect.poll(() => page.getByRole('img', { name: /Illustration de simulation.*Haval H6/ }).evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
   });
 
   test('une génération simulée se consulte et se télécharge depuis la bibliothèque', async ({ page }) => {
     test.setTimeout(90_000);
     await page.goto('/studio');
+    await page.getByLabel('Véhicule').selectOption({ index: 1 });
     const title = `Essai RIMCO ${Date.now()}`;
 
     await page.getByLabel('Titre de la vidéo').fill(title);
@@ -64,6 +66,7 @@ if (mockWithoutSupabase) {
     test.setTimeout(90_000);
     await signIn(page, adminEmail, adminPassword);
     await page.goto('/studio');
+    await page.getByLabel('Véhicule').selectOption({ index: 1 });
     await page.getByLabel('Titre de la vidéo').fill('Essai E2E');
     await page.getByLabel('Description de la vidéo').fill('Une Haval H6 bleue roule doucement dans le Plateau à Abidjan.');
     const createRequest = page.waitForRequest((request) => request.url().endsWith('/api/versions') && request.method() === 'POST');
