@@ -3,8 +3,8 @@ import { buildBrief } from '@/core/brief';
 import { shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
 
 const shots = [
-  { title: 'Découverte', scene: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 7, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
-  { title: 'Habitacle', scene: 'Détail intérieur', location: 'Habitacle du véhicule', action: 'La caméra révèle les finitions', camera: 'Travelling rapproché', durationSeconds: 6, vehiclePhotoId: 'vehicle-interior' },
+  { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 7, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
+  { title: 'Habitacle', scene: 'Détail intérieur', framing: 'Gros plan', location: 'Habitacle du véhicule', action: 'La caméra révèle les finitions', camera: 'Travelling rapproché', durationSeconds: 6, vehiclePhotoId: 'vehicle-interior' },
 ];
 
 describe('storyboard', () => {
