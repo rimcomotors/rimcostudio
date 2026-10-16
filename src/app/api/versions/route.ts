@@ -18,6 +18,7 @@ import { aggregateGenerationCost } from '@/core/billing/aggregate';
 import { singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
 import { createLiveStoryboard } from '@/core/versions/storyboard-live';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
+import { resolveGenerationTier } from '@/core/versions/generation-tier';
 
 const deleteSchema = z.object({ videoIds: z.array(z.string().uuid()).min(1).max(50) }).strict().refine((input) => new Set(input.videoIds).size === input.videoIds.length, { message: 'La sélection contient des doublons.' });
 const multiClipSchema = requestSchema.extend({
@@ -55,7 +56,7 @@ export async function GET(request: Request) {
       const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
       const versions = records.map((latest) => {
         const status = latest.reviewStatus === 'approved' ? 'ready' : latest.reviewStatus === 'rejected' ? 'rejected' : latest.reviewStatus === 'pending' ? 'review' : latest.status;
-        return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, tier: latest.tier ?? 'standard', durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
+        return { id: latest.id, videoId: latest.videoId, title: latest.title ?? latest.brief.vehicle_description, status, tier: latest.tier ?? null, durationSeconds: latest.brief.duration_s, priceFcfa: latest.priceFcfa, prompt: latest.prompt, previewUrl: latest.status === 'ready' ? latest.videoUrl : undefined, videoUrl: latest.status === 'ready' ? latest.videoUrl : undefined, createdAt: latest.createdAt };
       }).filter((item) => !requestedStatus || item.status === requestedStatus);
       return NextResponse.json({ versions });
     }
@@ -80,7 +81,7 @@ export async function GET(request: Request) {
       const canPreview = canPreviewReady || canPreviewReview || video.status === 'review' && isOwner;
       const briefData = latest?.brief_json && typeof latest.brief_json === 'object' ? latest.brief_json as Record<string, unknown> : {};
       const model = Array.isArray(latest?.model) ? latest.model[0] : latest?.model;
-      const generationTier = model?.tier === 'pro' || model?.tier === 'premium' || model?.tier === 'test' ? model.tier : 'standard';
+      const generationTier = resolveGenerationTier(briefData.generationTier ?? briefData.storyMode, model?.tier);
       const mockMetadata = briefData.mock_metadata && typeof briefData.mock_metadata === 'object' ? briefData.mock_metadata as Record<string, unknown> : {};
       const isPersistedMock = latest?.provider_request_id?.startsWith('mock:') ?? false;
       let videoUrl: string | null = null;

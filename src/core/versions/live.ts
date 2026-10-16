@@ -122,7 +122,8 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const videoTitle = input.title || `${vehicleMake ?? ''} ${vehicleModel ?? 'Véhicule'} · Nouvelle création`.trim();
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: videoTitle, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: { ...initialBrief, overlayLogo: input.overlayLogo, ...(referenceMode ? { referenceVideoMode: true, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: referenceAssets.map((photo) => photo.id), locationAssetId: selectedLocation?.id ?? null } : {}) }, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
+  const generationTier = input.tier === 'test' ? 'premium' : input.tier;
+  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: { ...initialBrief, generationTier, overlayLogo: input.overlayLogo, ...(referenceMode ? { referenceVideoMode: true, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: referenceAssets.map((photo) => photo.id), locationAssetId: selectedLocation?.id ?? null } : {}) }, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
   if (versionError || !version) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
