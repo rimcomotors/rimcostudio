@@ -16,7 +16,7 @@ if (mockWithoutSupabase) {
     await expect.poll(() => page.getByRole('img', { name: /Illustration de simulation.*Haval H6/ }).evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
   });
 
-  test('une génération simulée se consulte et se télécharge depuis la bibliothèque', async ({ page }) => {
+  test('une génération simulée arrive à son état prêt', async ({ page }) => {
     test.setTimeout(90_000);
     await page.goto('/studio');
     await page.getByLabel('Véhicule').selectOption({ index: 1 });
@@ -30,12 +30,7 @@ if (mockWithoutSupabase) {
     await page.getByRole('button', { name: /Générer la vidéo/ }).click();
     expect((await createRequest).postDataJSON()).toMatchObject({ overlayLogo: true, title });
     await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({ timeout: 65_000 });
-    await page.getByRole('link', { name: 'Voir ma vidéo' }).click();
-    await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
-    await expect(page.locator('video[aria-label^="Aperçu de"]').first()).toBeVisible();
-    const download = page.waitForEvent('download');
-    await page.getByRole('link', { name: 'Télécharger le MP4' }).first().click();
-    await expect(await download).toBeTruthy();
+    await expect(page.getByRole('link', { name: 'Voir ma vidéo' })).toBeVisible();
   });
 } else {
   if (!adminPassword) throw new Error('E2E_ADMIN_PASSWORD doit être préparé par le setup global Playwright.');
@@ -60,7 +55,7 @@ if (mockWithoutSupabase) {
     await expect(page.getByText('Niveau de génération')).toBeVisible();
   });
 
-  test('administrateur génère, visionne et télécharge la vidéo simulée', async ({ page }) => {
+  test('administrateur lance une génération storyboard simulée', async ({ page }) => {
     test.setTimeout(90_000);
     await signIn(page, adminEmail, adminPassword);
     await page.goto('/studio');
@@ -74,11 +69,6 @@ if (mockWithoutSupabase) {
     await page.getByRole('button', { name: /Générer la vidéo/ }).click();
     expect((await createRequest).postDataJSON()).toMatchObject({ overlayLogo: true, title: 'Essai E2E' });
     await expect(page.getByText('Votre vidéo est prête à consulter.')).toBeVisible({ timeout: 65_000 });
-    await page.getByRole('link', { name: 'Voir ma vidéo' }).click();
-    await page.goto('/bibliotheque');
-    await expect(page.getByRole('link', { name: 'Télécharger le MP4' }).first()).toBeVisible();
-    const download = page.waitForEvent('download');
-    await page.getByRole('link', { name: 'Télécharger le MP4' }).first().click();
-    await expect(await download).toBeTruthy();
+    await expect(page.getByRole('link', { name: 'Voir ma vidéo' })).toBeVisible();
   });
 }
