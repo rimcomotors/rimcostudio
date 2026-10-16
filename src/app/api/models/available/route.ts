@@ -30,7 +30,7 @@ export async function GET() {
     const referenceModels = (data ?? []).flatMap((model) => {
       if (model.tier !== 'standard' && model.tier !== 'pro' && model.tier !== 'premium') return [];
       const tier = model.tier as GenerationTier;
-      if (model.fal_endpoint_id !== REFERENCE_MODEL_ENDPOINTS[tier] || !model.allowed_durations?.includes(5) || !model.allowed_formats?.includes('16:9')) return [];
+      if (model.fal_endpoint_id !== REFERENCE_MODEL_ENDPOINTS[tier] || !model.allowed_durations?.includes(5) || !model.allowed_formats?.includes('16:9') || !model.allowed_formats?.includes('9:16')) return [];
       const durations = (model.allowed_durations as number[]).filter((duration) => {
         if (tier === 'standard') return duration >= 2 && duration <= 10;
         if (tier === 'pro') return duration >= 3 && duration <= 15;

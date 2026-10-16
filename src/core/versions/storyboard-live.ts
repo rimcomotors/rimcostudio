@@ -179,7 +179,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
       if (error || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer une image de référence.');
       return signed.signedUrl;
     }));
-    return provider.submit({ prompt: prompts[index], referenceImageUrls: refs, durationS: shot.durationSeconds, aspectRatio: '16:9', endUserId: actor.id });
+    return provider.submit({ prompt: prompts[index], referenceImageUrls: refs, durationS: shot.durationSeconds, aspectRatio: input.format, endUserId: actor.id });
   }));
   let submitted = 0;
   for (let index = 0; index < submissions.length; index += 1) {

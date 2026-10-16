@@ -7,7 +7,7 @@ import { formatFcfa } from '@/core/pricing';
 import { getScenePresets, getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { getRouteForGeneration } from '@/core/providers/model-routing';
 
-type Format = '16:9' | '9:16' | '1:1' | '4:5';
+type Format = '16:9' | '9:16';
 type Job = { id: string; status: string; error?: string; prompt?: string; completedShots?: number; totalShots?: number };
 type Model = { id: string; name: string; tier: string; adapterFamily: string; formats: Format[]; durations: number[]; estimatedPricesFcfa: Record<string, number>; isDefault: boolean; isReference: boolean };
 type VehicleDossier = { id: string | null; key: string; dossierIds?: string[]; make: string; model: string; color?: string | null; variant?: string | null; photos: Array<{ id: string; photoRole: string; title: string; angle?: string | null; previewUrl?: string | null }> };
@@ -40,8 +40,7 @@ function buildAutomaticShots(input: {
   }
   const shotCount = Math.min(requestedCount, maxCount);
   if (input.multiClip && shotCount < 2) {
-    const modelName = input.tier === 'standard' ? 'Wan' : input.tier === 'pro' ? 'Kling' : 'Seedance';
-    throw new Error(`${modelName} ne peut pas répartir ${input.durationSeconds} secondes en plusieurs clips. Choisissez 10 secondes ou plus, ou un autre niveau.`);
+    throw new Error('La durée choisie ne peut pas être répartie en plusieurs clips compatibles. Choisissez une durée plus longue ou un autre niveau.');
   }
   const baseDuration = Math.floor(input.durationSeconds / shotCount);
   const remainder = input.durationSeconds % shotCount;
@@ -102,7 +101,8 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
 
   const selectedDossier = vehicleDossiers.find((vehicle) => vehicle.key === vehicleDossierId);
   const effectivePlaceIds = durationS >= 10 ? placeIds : (locationAssetId ? [locationAssetId] : placeIds.slice(0, 1));
-  const multiClip = Boolean(selectedDossier && (selectedDossier.photos.length > 1 || durationS >= 10 && effectivePlaceIds.length > 1));
+  const tierMaxClipSeconds = tier === 'standard' ? 10 : tier === 'pro' ? 15 : 30;
+  const multiClip = Boolean(selectedDossier && (selectedDossier.photos.length > 1 || durationS >= 10 && effectivePlaceIds.length > 1 || durationS > tierMaxClipSeconds));
   const selectedPhoto = selectedDossier?.photos.find((photo) => photo.id === assetId) ?? selectedDossier?.photos[0];
   const selectedAsset = selectedPhoto ? { ...selectedPhoto, make: selectedDossier?.make, model: selectedDossier?.model, color: selectedDossier?.color } : undefined;
   const vehicleCategory = inferVehicleCategory(selectedAsset?.make, selectedAsset?.model);
@@ -113,13 +113,13 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const selectedScene = getScenePreset(scenePresetId) ?? relevantScenes[0];
   const compatibleModels = availableModels.filter((model) => model.tier === tier && !model.isReference);
   const route = getRouteForGeneration(tier, durationS);
-  const routedModel = compatibleModels.find((model) => model.adapterFamily === route?.adapterFamily && model.durations.includes(durationS));
+  const routedModel = compatibleModels.find((model) => model.adapterFamily === route?.adapterFamily && model.durations.includes(durationS) && model.formats.includes(format));
   const singleReferenceMode = !multiClip;
   const selectedModel = singleReferenceMode
-    ? availableModels.find((model) => model.tier === tier && model.isReference)
+    ? availableModels.find((model) => model.tier === tier && model.isReference && model.formats.includes(format))
     : routedModel;
   const storyboardModel = multiClip
-    ? availableModels.find((model) => model.tier === tier && model.isReference)
+    ? availableModels.find((model) => model.tier === tier && model.isReference && model.formats.includes(format))
     : selectedModel;
   const estimatedPriceFcfa = storyboardModel?.estimatedPricesFcfa[String(durationS)];
   const generationActive = Boolean(job && !['ready', 'failed'].includes(job.status));
@@ -128,10 +128,6 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   function clearFormError() {
     setError('');
   }
-
-  useEffect(() => {
-    if (selectedModel && !selectedModel.formats.includes(format)) setFormat(selectedModel.formats[0] ?? '16:9');
-  }, [selectedModel, format]);
 
   useEffect(() => {
     const allowed = durationOptions;
@@ -236,8 +232,8 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       const firstPhoto = selectedDossier.photos.find((photo) => photo.id === shots[0].vehiclePhotoId) ?? selectedDossier.photos[0];
       const workflow = multiClip ? 'multi_clip' : 'single_storyboard';
       const payload = multiClip
-        ? { workflow, description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), placeIds: effectivePlaceIds, storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots, storyboardLedgerIds: [], format: '16:9', tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }
-        : { workflow, storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots, storyboardLedgerIds: [], description: additionalDirection, conceptId, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), locationAssetId: effectivePlaceIds[0] ?? null, character, format: '16:9', tier, durationS, overlayLogo, complexity, placeIds: effectivePlaceIds.slice(0, 1), scenePresetId: selectedScene?.id ?? '', vehicleCategory, location: selectedScene?.location ?? '', setting: selectedScene?.setting ?? '', lighting: selectedScene?.lighting ?? lightOptions[0], vehicleAction: selectedScene?.vehicleAction ?? 'Le véhicule avance lentement et régulièrement', cameraMovement: selectedScene?.cameraMovement ?? '', mood: selectedScene?.mood ?? '', ...(mode === 'live' && storyboardModel ? { modelId: storyboardModel.id } : {}) };
+        ? { workflow, description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), placeIds: effectivePlaceIds, storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots, storyboardLedgerIds: [], format, tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }
+        : { workflow, storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots, storyboardLedgerIds: [], description: additionalDirection, conceptId, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), locationAssetId: effectivePlaceIds[0] ?? null, character, format, tier, durationS, overlayLogo, complexity, placeIds: effectivePlaceIds.slice(0, 1), scenePresetId: selectedScene?.id ?? '', vehicleCategory, location: selectedScene?.location ?? '', setting: selectedScene?.setting ?? '', lighting: selectedScene?.lighting ?? lightOptions[0], vehicleAction: selectedScene?.vehicleAction ?? 'Le véhicule avance lentement et régulièrement', cameraMovement: selectedScene?.cameraMovement ?? '', mood: selectedScene?.mood ?? '', ...(mode === 'live' && storyboardModel ? { modelId: storyboardModel.id } : {}) };
       const response = await fetch('/api/versions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'La génération n’a pas pu démarrer.');
@@ -258,7 +254,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       if (!firstPhoto) throw new Error('Ajoutez une photo validée au dossier véhicule.');
       const response = await fetch('/api/storyboard/compare', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ campaignId: comparisonCampaignId || undefined, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], placeIds: effectivePlaceIds, clipDurationSeconds: durationS as 15 | 20, purpose, storyboard: shots, description: additionalDirection, title, assetId: firstPhoto.id, format: '16:9', tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }),
+        body: JSON.stringify({ campaignId: comparisonCampaignId || undefined, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], placeIds: effectivePlaceIds, clipDurationSeconds: durationS as 15 | 20, purpose, storyboard: shots, description: additionalDirection, title, assetId: firstPhoto.id, format, tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Le comparatif n’a pas pu démarrer.');
@@ -293,7 +289,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
 
       <aside id="generation-options" className="min-w-0 space-y-3 xl:sticky xl:top-5">
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-2 text-[11px] font-semibold">Durée de la vidéo</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => { setDurationS(seconds); clearFormError(); if (seconds < 10 && placeIds.length > 1) setPlaceIds((current) => current.slice(0, 1)); }} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s + 2 s logo = {seconds + 2} s</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">La durée sélectionnée comprend les clips ; le logo animé ajoute 2 secondes à la fin.</p></fieldset>
+          <fieldset><legend className="mb-2 text-[11px] font-semibold">Durée de la vidéo</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => { setDurationS(seconds); clearFormError(); if (seconds < 10 && placeIds.length > 1) setPlaceIds((current) => current.slice(0, 1)); }} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">La durée choisie correspond aux clips. L’animation du logo est ajoutée à la fin.</p></fieldset>
           <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Intention</legend><div className="flex gap-1.5">{([{ value: 'presentation', label: 'Présentation fidèle' }, { value: 'advertising', label: 'Publicité premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setPurpose(option.value); clearFormError(); }} aria-pressed={purpose === option.value} className={`flex-1 rounded-full border px-2 py-1.5 text-[10px] ${purpose === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div></fieldset>
         </section>
 
@@ -318,10 +314,10 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
         </section>
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(['16:9'] as const).map((value) => <button type="button" key={value} onClick={() => setFormat(value as Format)} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
-          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard · Wan' }, { value: 'pro', label: 'Pro · Kling' }, { value: 'premium', label: 'Premium · Seedance' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); clearFormError(); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Durée : {durationS} s + 2 s de logo animé.</p></fieldset>
-          <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] text-[#88847d]">Le logo RIMCO animé ajoute 2 s à la durée sélectionnée.</p>
-          {mode === 'live' && <div className="mt-4 rounded-md bg-[#f8f7f4] px-3 py-2.5 text-[10px] text-[#716d66]">{modelsLoading ? <p role="status">Chargement des modèles…</p> : modelsError ? <p role="alert">{modelsError}</p> : <p>Modèle prévu : <b>{storyboardModel?.name ?? 'Aucun modèle compatible configuré'}</b></p>}</div>}
+          <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(['16:9', '9:16'] as const).map((value) => <button type="button" key={value} onClick={() => { setFormat(value); clearFormError(); }} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
+          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); clearFormError(); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Durée des clips : {durationS} s.</p></fieldset>
+          {mode === 'live' && modelsError && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">{modelsError}</p>}
+          {mode === 'live' && !modelsLoading && !modelsError && !storyboardModel && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">Aucune option disponible pour cette durée et ce format. Choisissez un autre niveau ou format.</p>}
           {mode === 'mock' && <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Simulation active : aucune vidéo payante ne sera générée.</p>}
           {mode === 'live' && estimatedPriceFcfa != null && <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] text-[#88847d]">Estimation vidéo · environ {formatFcfa(estimatedPriceFcfa)}</p>}
           <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] leading-4 text-[#88847d]">La vidéo sera générée directement. Les plans et les lieux suivront automatiquement vos choix.</p>
@@ -330,7 +326,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       </aside>
       <div className="space-y-3 xl:col-span-2">
         {error && <div role="alert" className="rounded-md border border-red-100 bg-red-50 p-4 text-xs leading-5 text-red-800"><p>{error}</p><button type="submit" disabled={busy} className="mt-2 font-semibold underline underline-offset-2">Réessayer la génération</button></div>}
-        <button type="submit" disabled={busy || generationActive || !selectedDossier?.id || !selectedDossier.photos.length || mode === 'live' && (!storyboardModel || modelsLoading)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Lancement de la génération…' : generationActive ? 'Génération en cours…' : `Générer la vidéo · ${durationS} s + 2 s du logo`}</button>
+        <button type="submit" disabled={busy || generationActive || !selectedDossier?.id || !selectedDossier.photos.length || mode === 'live' && (!storyboardModel || modelsLoading)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Lancement de la génération…' : generationActive ? 'Génération en cours…' : `Générer la vidéo · ${durationS} s`}</button>
         {multiClip && durationS >= 15 && isAdmin && mode === 'live' && <button type="button" disabled={busy} onClick={() => void compareWanAndKling()} className="w-full rounded-md bg-[#253b4e] px-4 py-3 text-xs font-semibold text-white disabled:opacity-50">Comparer Wan et Kling</button>}
         <p className="text-center text-[10px] text-[#88847d]">Lancement direct : les vues et lieux sélectionnés déterminent automatiquement les plans.</p>
       </div>

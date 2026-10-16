@@ -123,7 +123,7 @@ export async function POST(request: Request) {
       const single = singleStoryboardSchema.parse(payload);
       validateSingleShotStoryboard(single.storyboard, single.clipDurationSeconds, getStoryboardModeRoute(single.storyMode).adapterFamily);
       if (single.tier !== single.storyMode) throw new HttpError(422, 'Le mode de génération doit correspondre au storyboard validé.');
-      if (single.format !== '16:9' || single.audioAssetId) throw new HttpError(422, 'Le storyboard utilise le format horizontal 16:9, sans audio.');
+      if (single.audioAssetId) throw new HttpError(422, 'Le storyboard est sans audio pour le moment.');
       if (env.PROVIDERS_MODE === 'mock') {
         return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du storyboard IA à un seul plan.', completedShots: 1, totalShots: 1, estimatedPriceFcfa: 0 }, { status: 201 });
       }
@@ -132,7 +132,7 @@ export async function POST(request: Request) {
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'multi_clip') {
       const multi = multiClipSchema.parse(payload);
       validateStoryboard(multi.storyboard, multi.clipDurationSeconds, getStoryboardModeRoute(multi.storyMode).adapterFamily);
-      if (multi.format !== '16:9' || multi.audioAssetId) throw new HttpError(422, 'Le storyboard multi-plans utilise le format horizontal 16:9, sans audio.');
+      if (multi.audioAssetId) throw new HttpError(422, 'Le storyboard multi-plans est sans audio pour le moment.');
       if (env.PROVIDERS_MODE === 'mock') {
         return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du storyboard multi-plans.', completedShots: multi.storyboard.length, totalShots: multi.storyboard.length, estimatedPriceFcfa: 0 }, { status: 201 });
       }
