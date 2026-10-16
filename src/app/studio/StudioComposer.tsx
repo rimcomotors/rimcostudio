@@ -13,7 +13,6 @@ type Model = { id: string; name: string; tier: string; adapterFamily: string; fo
 type VehicleDossier = { id: string | null; key: string; dossierIds?: string[]; make: string; model: string; color?: string | null; variant?: string | null; photos: Array<{ id: string; photoRole: string; title: string; angle?: string | null; previewUrl?: string | null }> };
 type PlaceAsset = { id: string; title?: string; category?: string; previewUrl?: string | null; isCurated?: boolean };
 type StoryShot = { title: string; scene: string; framing: string; location: string; action: string; camera: string; durationSeconds: number; vehiclePhotoId: string; locationPhotoId?: string | null };
-type ComparisonJob = { mode: 'standard' | 'pro'; id?: string; status: string; completedShots?: number; totalShots?: number; error?: string };
 const durationOptions = [5, 10, 15, 20];
 const lightOptions = ['Lumière naturelle claire du matin'];
 
@@ -107,9 +106,6 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [vehicleDossierId, setVehicleDossierId] = useState('');
   const [placeIds, setPlaceIds] = useState<string[]>([]);
   const [locationAssetId, setLocationAssetId] = useState('');
-  const [comparisonCampaignId, setComparisonCampaignId] = useState('');
-  const [comparisonJobs, setComparisonJobs] = useState<ComparisonJob[]>([]);
-  const [isAdmin, setIsAdmin] = useState(false);
 
   const selectedDossier = vehicleDossiers.find((vehicle) => vehicle.key === vehicleDossierId);
   const effectivePlaceIds = durationS >= 10 ? placeIds : (locationAssetId ? [locationAssetId] : placeIds.slice(0, 1));
@@ -172,10 +168,6 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   }, [mode]);
 
   useEffect(() => {
-    void fetch('/api/me').then((response) => response.ok ? response.json() : null).then((data) => setIsAdmin(data?.actor?.role === 'admin')).catch(() => setIsAdmin(false));
-  }, []);
-
-  useEffect(() => {
     let active = true;
     setAssetsLoading(true);
     setAssetsError('');
@@ -219,22 +211,6 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
     return () => window.clearInterval(timer);
   }, [job, jobId]);
 
-  useEffect(() => {
-    if (!comparisonJobs.length || comparisonJobs.every((item) => !item.id || ['ready', 'failed'].includes(item.status))) return;
-    const timer = window.setInterval(async () => {
-      const updated = await Promise.all(comparisonJobs.map(async (item) => {
-        if (!item.id || ['ready', 'failed'].includes(item.status)) return item;
-        try {
-          const response = await fetch(`/api/versions/${item.id}/refresh`);
-          const data = await response.json();
-          return response.ok ? { ...item, ...data } : item;
-        } catch { return item; }
-      }));
-      setComparisonJobs(updated);
-    }, 10_000);
-    return () => window.clearInterval(timer);
-  }, [comparisonJobs]);
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError('');
@@ -256,25 +232,6 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
     } finally {
       setBusy(false);
     }
-  }
-
-  async function compareWanAndKling() {
-    setError(''); setBusy(true);
-    try {
-      if (!selectedDossier?.id || durationS < 15) throw new Error('Le comparatif nécessite un véhicule et une durée de 15 ou 20 secondes.');
-      const shots = buildAutomaticShots({ vehicle: selectedDossier, places, placeIds: effectivePlaceIds, durationSeconds: durationS, multiClip: true, tier: 'standard', selectedPhotoId: assetId });
-      const firstPhoto = selectedDossier.photos.find((photo) => photo.id === shots[0].vehiclePhotoId) ?? selectedDossier.photos[0];
-      if (!firstPhoto) throw new Error('Ajoutez une photo validée au dossier véhicule.');
-      const response = await fetch('/api/storyboard/compare', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ campaignId: comparisonCampaignId || undefined, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], placeIds: effectivePlaceIds, clipDurationSeconds: durationS as 15 | 20, purpose, storyboard: shots, description: additionalDirection, title, assetId: firstPhoto.id, format, tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error ?? 'Le comparatif n’a pas pu démarrer.');
-      setComparisonCampaignId(data.campaignId);
-      setComparisonJobs(data.jobs ?? []);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Le comparatif n’a pas pu démarrer.');  }
-    finally { setBusy(false); }
   }
 
   return (
@@ -340,7 +297,6 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       <div className="space-y-3 xl:col-span-2">
         {error && <div role="alert" className="rounded-md border border-red-100 bg-red-50 p-4 text-xs leading-5 text-red-800"><p>{error}</p><button type="submit" disabled={busy} className="mt-2 font-semibold underline underline-offset-2">Réessayer la génération</button></div>}
         <button type="submit" disabled={busy || generationActive || !selectedDossier?.id || !selectedDossier.photos.length || mode === 'live' && (!storyboardModel || modelsLoading)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Lancement de la génération…' : generationActive ? 'Génération en cours…' : `Générer la vidéo · ${durationS} s`}</button>
-        {multiClip && durationS >= 15 && isAdmin && mode === 'live' && <button type="button" disabled={busy} onClick={() => void compareWanAndKling()} className="w-full rounded-md bg-[#253b4e] px-4 py-3 text-xs font-semibold text-white disabled:opacity-50">Comparer Wan et Kling</button>}
         <p className="text-center text-[10px] text-[#88847d]">Lancement direct : les vues et lieux sélectionnés déterminent automatiquement les plans.</p>
       </div>
     </form>
