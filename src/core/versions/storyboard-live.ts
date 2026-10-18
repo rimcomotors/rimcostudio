@@ -80,7 +80,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     user_direction: input.description,
     location: input.location,
     setting: input.setting,
-    character: input.character || 'Aucun personnage',
+    character: input.character || 'as explicitly requested in the user direction; otherwise none',
     lighting: input.lighting,
     camera_movement: input.cameraMovement,
     mood: input.mood,

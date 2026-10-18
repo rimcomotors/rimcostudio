@@ -17,11 +17,15 @@ const requestSchema = z.object({
   workflow: z.enum(['single', 'multi_clip']).default('multi_clip'),
   vehicleDossierId: z.string().uuid(),
   vehicleDossierIds: z.array(z.string().uuid()).max(20).default([]),
+  vehiclePhotoIds: z.array(z.string().uuid()).max(30).default([]),
   placeIds: z.array(z.string().uuid()).max(12).default([]),
   mode: z.enum(['standard', 'pro', 'premium']),
   durationSeconds: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
   purpose: z.enum(['presentation', 'advertising']),
   direction: z.string().trim().max(500).default(''),
+  format: z.enum(['16:9', '9:16', '1:1', '4:5']).default('16:9'),
+  character: z.string().trim().max(160).default(''),
+  lighting: z.string().trim().max(160).default(''),
 }).strict();
 const storyboardResponseSchema = z.object({ shots: storyboardSchema }).strict();
 const singleShotStoryboardResponseSchema = z.object({ shots: singleShotStoryboardSchema }).strict();
@@ -33,7 +37,7 @@ export async function POST(request: Request) {
     const actor = await getActor();
     if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
     const input = requestSchema.parse(await request.json());
-    if (input.workflow === 'multi_clip' && input.durationSeconds !== 15 && input.durationSeconds !== 20) throw new HttpError(422, 'Le workflow multi-plans propose 15 ou 20 secondes de clips, puis ajoute 2 secondes de logo.');
+    if (input.workflow === 'multi_clip' && input.durationSeconds < 10) throw new HttpError(422, 'Le workflow multi-plans demande au moins 10 secondes de clips.');
     const supabase = await createSupabaseServerClient();
     const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
     const { data: dossiers, error: dossierError } = await supabase.from('vehicle_dossiers')
@@ -56,20 +60,27 @@ export async function POST(request: Request) {
         .in('id', uploadedIds).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId) : { data: [], error: null };
       if (error || !data || data.length !== uploadedIds.length) throw new HttpError(422, 'Un ou plusieurs lieux ne sont pas disponibles pour votre marque.');
       places = [...curated.map((place) => ({ id: place.id, title: place.title, category: place.category, path: place.path })), ...data];
+      places = input.placeIds.map((id) => places.find((place) => place.id === id)).filter((place): place is typeof places[number] => Boolean(place));
     }
     const route = getStoryboardModeRoute(input.mode);
-    const selectedVehicle = vehiclePhotos.slice(0, route.maxReferenceImages);
+    const selectedVehicle = (input.vehiclePhotoIds.length
+      ? input.vehiclePhotoIds.map((id) => vehiclePhotos.find((photo) => photo.id === id)).filter((photo): photo is typeof vehiclePhotos[number] => Boolean(photo))
+      : vehiclePhotos).slice(0, route.maxReferenceImages);
+    if (!selectedVehicle.length || input.vehiclePhotoIds.length > 0 && selectedVehicle.length !== Math.min(input.vehiclePhotoIds.length, route.maxReferenceImages)) {
+      throw new HttpError(422, 'Une ou plusieurs photos véhicule sélectionnées ne sont plus disponibles.');
+    }
     const selectedPlaces = places.slice(0, Math.max(0, route.maxReferenceImages - 1));
     const instructionInput = {
       durationSeconds: input.durationSeconds,
       vehicle: [dossier.make, dossier.model, dossier.variant, dossier.color].filter(Boolean).join(' '),
       vehiclePhotos: selectedVehicle.map((photo) => ({ id: photo.id, role: photo.photo_role ?? 'exterior', title: photo.title ?? 'Photo véhicule', angle: photo.angle })),
       places: selectedPlaces.map((place) => ({ id: place.id, title: place.title ?? 'Lieu', category: place.category })),
-      purpose: input.purpose, direction: input.direction,
+      purpose: input.purpose, direction: input.direction, format: input.format,
+      character: input.character, lighting: input.lighting,
     };
     const instruction = input.workflow === 'single'
       ? buildSingleShotStoryboardInstruction(instructionInput)
-      : buildStoryboardInstruction({ ...instructionInput, durationSeconds: input.durationSeconds as 15 | 20, mode: input.mode });
+      : buildStoryboardInstruction({ ...instructionInput, durationSeconds: input.durationSeconds, mode: input.mode });
 
     let shots: StoryboardShot[];
     let storyboardLedgerId: string | null = null;
@@ -79,7 +90,7 @@ export async function POST(request: Request) {
       const total = input.durationSeconds;
       const durations = input.workflow === 'single'
         ? [total]
-        : total === 15 ? [8, 7] : [10, 10];
+        : total === 10 ? [5, 5] : total === 15 ? [8, 7] : [10, 10];
       const drafts = durations.map((durationSeconds, index) => ({
         title: index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
         scene: index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBrief } from '@/core/brief';
-import { expandSingleShotStoryboard, finalVideoSeconds, getSingleShotClipDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
+import { buildStoryboardInstruction, expandSingleShotStoryboard, finalVideoSeconds, getSingleShotClipDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
 
 const shots = [
   { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 8, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
@@ -15,10 +15,33 @@ describe('storyboard', () => {
   });
 
   it('requires generated clips to fill the selected runtime before adding the logo card', () => {
+    expect(validateStoryboard([{ ...shots[0], durationSeconds: 5 }, { ...shots[1], durationSeconds: 5 }], 10, 'seedance')).toBe(true);
     expect(validateStoryboard(shots, 15, 'wan')).toBe(true);
     expect(() => validateStoryboard(shots, 20, 'wan')).toThrow(/durée/i);
     expect(() => validateStoryboard([{ ...shots[0], durationSeconds: 11 }, { ...shots[1], durationSeconds: 9 }], 20, 'wan')).toThrow(/maximum/i);
     expect(validateStoryboard([{ ...shots[0], durationSeconds: 12 }, { ...shots[1], durationSeconds: 8 }], 20, 'kling')).toBe(true);
+  });
+
+  it('builds a director brief for the selected runtime, aspect ratio and user story', () => {
+    const instruction = buildStoryboardInstruction({
+      durationSeconds: 10,
+      mode: 'premium',
+      vehicle: 'GWM Tank 300 noir',
+      vehiclePhotos: [{ id: 'vehicle-front', role: 'exterior', title: 'Avant trois-quarts' }],
+      places: [{ id: 'place-plateau', title: 'Abidjan, Plateau' }],
+      purpose: 'advertising',
+      direction: 'Une famille traverse Abidjan au coucher du soleil.',
+      format: '9:16',
+      character: 'Une famille à bord du véhicule',
+      lighting: 'Fin de journée',
+    });
+
+    expect(instruction).toContain('10s of footage in 9:16');
+    expect(instruction).toContain('9:16');
+    expect(instruction).toContain('Une famille traverse Abidjan au coucher du soleil.');
+    expect(instruction).toContain('automotive commercial film director');
+    expect(instruction).toContain('Une famille à bord du véhicule');
+    expect(instruction).toContain('Fin de journée');
   });
 
   it('keeps the selected vehicle identity and image references in each shot prompt', () => {
@@ -32,6 +55,20 @@ describe('storyboard', () => {
     expect(prompt).toContain('place-plateau');
     expect(prompt).toContain('shot 1 of 2');
     expect(prompt).toContain('no titles, captions, overlays, added logos, or transitions');
+    expect(prompt).toContain('natural environmental effects requested by the brief, such as dust from a dirt road');
+  });
+
+  it('does not suppress people explicitly requested in the creative direction', () => {
+    const brief = buildBrief('Une famille traverse Abidjan en voiture.', {
+      vehicle_asset_id: 'vehicle-folder-1', vehicle_description: 'GWM Tank 300 noir',
+      user_direction: 'Une famille traverse Abidjan en voiture.',
+      character: 'as explicitly requested in the user direction; otherwise none',
+    });
+    const prompt = shotToPrompt(brief, shots[0], 0, 2);
+
+    expect(prompt).toContain('Une famille traverse Abidjan en voiture.');
+    expect(prompt).toContain('Character: as explicitly requested in the user direction; otherwise none.');
+    expect(prompt).not.toContain('none; do not add people');
   });
 
   it('uses the selected aspect ratio in the master prompt', () => {

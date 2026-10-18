@@ -95,9 +95,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [assetsRetry, setAssetsRetry] = useState(0);
   const [assetId, setAssetId] = useState('');
   const [title, setTitle] = useState('');
-  const [overlayLogo] = useState(true);
   const [scenePresetId, setScenePresetId] = useState('');
-  const conceptId = 'signature';
   const complexity = 'balanced';
   const [tier, setTier] = useState<'standard' | 'pro' | 'premium'>('standard');
   const [photoFidelityMode, setPhotoFidelityMode] = useState(false);
@@ -220,14 +218,37 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
     setBusy(true);
     try {
       if (!selectedDossier?.id || !selectedDossier.photos.length) throw new Error('Choisissez un véhicule avec au moins une photo validée.');
-      const shots = buildAutomaticShots({ vehicle: selectedDossier, places, placeIds: effectivePlaceIds, durationSeconds: durationS, multiClip, selectedPhotoId: assetId, photoFidelityMode });
-      const firstPhoto = selectedDossier.photos.find((photo) => photo.id === shots[0].vehiclePhotoId) ?? selectedDossier.photos[0];
-      const workflow = multiClip ? 'multi_clip' : 'single_storyboard';
-      const payload = photoFidelityMode
-        ? { workflow: 'photo_fidelity', description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), placeIds: effectivePlaceIds, storyMode: tier, clipDurationSeconds: durationS, storyboard: shots.map((shot) => ({ title: shot.title, durationSeconds: shot.durationSeconds, vehiclePhotoId: shot.vehiclePhotoId, locationPhotoId: shot.locationPhotoId ?? null })), format, tier, durationS, overlayLogo: true, complexity: 'balanced' }
-        : multiClip
-        ? { workflow, description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), placeIds: effectivePlaceIds, storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots, storyboardLedgerIds: [], format, tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }
-        : { workflow, storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots, storyboardLedgerIds: [], description: additionalDirection, conceptId, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), locationAssetId: effectivePlaceIds[0] ?? null, character, format, tier, durationS, overlayLogo, complexity, placeIds: effectivePlaceIds.slice(0, 1), scenePresetId: selectedScene?.id ?? '', vehicleCategory, location: selectedScene?.location ?? '', setting: selectedScene?.setting ?? '', lighting: selectedScene?.lighting ?? lightOptions[0], vehicleAction: selectedScene?.vehicleAction ?? 'Le véhicule avance lentement et régulièrement', cameraMovement: selectedScene?.cameraMovement ?? '', mood: selectedScene?.mood ?? '', ...(mode === 'live' && storyboardModel ? { modelId: storyboardModel.id } : {}) };
+      const selectedVehiclePhotoIds = [assetId, ...selectedDossier.photos.map((photo) => photo.id).filter((id) => id !== assetId)].filter(Boolean);
+      let payload: Record<string, unknown>;
+      if (photoFidelityMode) {
+        const shots = buildAutomaticShots({ vehicle: selectedDossier, places, placeIds: effectivePlaceIds, durationSeconds: durationS, multiClip, selectedPhotoId: assetId, photoFidelityMode });
+        const firstPhoto = selectedDossier.photos.find((photo) => photo.id === shots[0].vehiclePhotoId) ?? selectedDossier.photos[0];
+        payload = { workflow: 'photo_fidelity', description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: effectivePlaceIds, storyMode: tier, clipDurationSeconds: durationS, storyboard: shots.map((shot) => ({ title: shot.title, durationSeconds: shot.durationSeconds, vehiclePhotoId: shot.vehiclePhotoId, locationPhotoId: shot.locationPhotoId ?? null })), format, tier, durationS, overlayLogo: true, complexity: 'balanced' };
+      } else {
+        const workflow = durationS === 5 ? 'single' : 'multi_clip';
+        const directorResponse = await fetch('/api/storyboard/suggest', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ workflow, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: effectivePlaceIds, mode: tier, durationSeconds: durationS, purpose, direction: additionalDirection, character, lighting: selectedScene?.lighting ?? lightOptions[0], format }),
+        });
+        const directorData = await directorResponse.json();
+        if (!directorResponse.ok) throw new Error(directorData.error ?? 'Le réalisateur IA n’a pas pu préparer la vidéo. Aucune vidéo n’a été lancée.');
+        const shots = directorData.storyboard as StoryShot[] | undefined;
+        if (!shots?.length) throw new Error('Le réalisateur IA n’a pas proposé de plans valides. Aucune vidéo n’a été lancée. Réessayez.');
+        const firstPhoto = selectedDossier.photos.find((photo) => photo.id === shots[0].vehiclePhotoId) ?? selectedDossier.photos[0];
+        payload = {
+          workflow: workflow === 'single' ? 'single_storyboard' : 'multi_clip',
+          description: additionalDirection, title, assetId: firstPhoto.id,
+          vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id],
+          vehiclePhotoIds: selectedVehiclePhotoIds, placeIds: workflow === 'single' ? effectivePlaceIds.slice(0, 1) : effectivePlaceIds,
+          storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots,
+          storyboardLedgerIds: directorData.storyboardLedgerId ? [directorData.storyboardLedgerId] : [],
+          format, tier, durationS, overlayLogo: true, complexity, character,
+          lighting: selectedScene?.lighting ?? lightOptions[0], scenePresetId: selectedScene?.id ?? '',
+          vehicleCategory, location: selectedScene?.location ?? '', setting: selectedScene?.setting ?? '',
+          vehicleAction: selectedScene?.vehicleAction ?? 'Le véhicule avance lentement et régulièrement',
+          cameraMovement: selectedScene?.cameraMovement ?? '', mood: selectedScene?.mood ?? '',
+        };
+      }
       const response = await fetch('/api/versions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'La génération n’a pas pu démarrer.');
@@ -304,7 +325,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
       </aside>
       <div className="space-y-3 xl:col-span-2">
         {error && <div role="alert" className="rounded-md border border-red-100 bg-red-50 p-4 text-xs leading-5 text-red-800"><p>{error}</p><button type="submit" disabled={busy} className="mt-2 font-semibold underline underline-offset-2">Réessayer la génération</button></div>}
-        <button type="submit" disabled={busy || generationActive || !selectedDossier?.id || !selectedDossier.photos.length || !photoFidelityMode && mode === 'live' && (!storyboardModel || modelsLoading)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Lancement de la génération…' : generationActive ? 'Génération en cours…' : `${photoFidelityMode ? 'Assembler les photos' : 'Générer la vidéo'} · ${durationS} s`}</button>
+        <button type="submit" disabled={busy || generationActive || !selectedDossier?.id || !selectedDossier.photos.length || !photoFidelityMode && mode === 'live' && (!storyboardModel || modelsLoading)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? photoFidelityMode ? 'Assemblage en cours…' : 'Le réalisateur prépare la vidéo…' : generationActive ? 'Génération en cours…' : `${photoFidelityMode ? 'Assembler les photos' : 'Générer la vidéo'} · ${durationS} s`}</button>
         <p className="text-center text-[10px] text-[#88847d]">Lancement direct : les vues et lieux sélectionnés déterminent automatiquement les plans.</p>
       </div>
     </form>
