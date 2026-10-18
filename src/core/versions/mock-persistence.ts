@@ -12,6 +12,7 @@ import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { reserveGenerationCost, settleUsageCost } from '@/core/billing/ledger';
 import { approveCompletedAdminVideo } from '@/core/versions/approval';
+import { refreshLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 
 export const MOCK_VIDEO_PATH = 'mock/mock-video.mp4';
 
@@ -64,13 +65,14 @@ export async function refreshPersistedMockVersion(versionId: string, actor: Acto
   if (!supabaseServiceKey) throw new HttpError(503, 'Le mode mock avec Supabase exige SUPABASE_SERVICE_ROLE_KEY ou SUPABASE_SECRET_KEY.');
   const admin = createStorageAdminClient();
   const { data: version, error } = await admin.from('video_versions')
-    .select('id,video_id,status,raw_path,created_at,video:videos!inner(id,user_id,status,brand_id,department)')
+    .select('id,video_id,status,raw_path,created_at,brief_json,video:videos!inner(id,user_id,status,brand_id,department)')
     .eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   const owns = video?.user_id === actor.id;
   const canReview = actor.role === 'valideur' && video?.status === 'review' && video.brand_id === actor.brandId && video.department === actor.department;
   if (!video || !owns && !canReview && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
+  if (version.brief_json && typeof version.brief_json === 'object' && (version.brief_json as Record<string, unknown>).photoFidelityMode === true) return refreshLivePhotoFidelity(versionId, actor);
   if (version.status === 'failed') return { id: versionId, status: 'failed' as const };
   if (version.status === 'ready') {
     if (actor.role === 'admin' && video.status !== 'approved') {

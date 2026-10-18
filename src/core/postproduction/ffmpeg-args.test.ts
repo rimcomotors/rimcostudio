@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { deflateSync } from 'node:zlib';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ffmpegPath from 'ffmpeg-static';
-import { makeFinalVideoArgs, makeMultiClipMontageArgs, makeShotMontageArgs, shouldOverlayLogo } from './ffmpeg-args';
+import { hasTransparentPngPixels } from './photo-fidelity';
+import { makeFinalVideoArgs, makeMultiClipMontageArgs, makePhotoFidelityShotArgs, makeShotMontageArgs, shouldOverlayLogo } from './ffmpeg-args';
 
 describe('FFmpeg final video arguments', () => {
   it('joins a variable number of generated clips and reserves a separate animated two-second logo card', () => {
@@ -75,6 +77,33 @@ describe('logo preference persistence', () => {
   });
 });
 
+describe('montage photo fidèle', () => {
+  it('compose une photo détourée sur le vrai lieu, anime seulement la caméra et respecte le ratio', () => {
+    const args = makePhotoFidelityShotArgs({
+      backgroundFile: '/tmp/abidjan.jpg', vehicleFile: '/tmp/vehicle-cutout.png',
+      outputFile: '/tmp/shot.mp4', durationSeconds: 5, format: '9:16',
+    });
+    const command = args.join(' ');
+    expect(command).toContain('/tmp/abidjan.jpg');
+    expect(command).toContain('/tmp/vehicle-cutout.png');
+    expect(command).toContain('overlay=');
+    expect(command).toContain('zoompan=');
+    expect(command).toContain('720x1280');
+    expect(command).toContain('5');
+    expect(command).toContain('/tmp/shot.mp4');
+  });
+
+  it('anime la photo réelle seule pour un plan intérieur', () => {
+    const args = makePhotoFidelityShotArgs({
+      backgroundFile: '/tmp/interior.jpg', outputFile: '/tmp/interior.mp4',
+      durationSeconds: 5, format: '1:1',
+    });
+    expect(args).not.toContain('overlay=');
+    expect(args.join(' ')).toContain('zoompan=');
+    expect(args.join(' ')).toContain('1080x1080');
+  });
+});
+
 describe('FFmpeg logo rendering', () => {
   it('assembles a variable-length storyboard and renders a separate two-second animated end card', async () => {
     const executable = ffmpegPath;
@@ -138,4 +167,71 @@ describe('FFmpeg logo rendering', () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 60_000);
+
+  it('renders the selected source photos and appends the two-second logo card', async () => {
+    const executable = ffmpegPath;
+    if (!executable) throw new Error('Le binaire FFmpeg de test est indisponible.');
+    const directory = await mkdtemp(join(tmpdir(), 'rimco-photo-fidelity-test-'));
+    const place = join(directory, 'place.jpg');
+    const vehicle = join(directory, 'vehicle.png');
+    const shot = join(directory, 'shot.mp4');
+    const output = join(directory, 'final.mp4');
+    const run = (args: string[]) => {
+      const result = spawnSync(executable, args, { encoding: 'utf8', timeout: 60_000 });
+      if (result.status !== 0) throw new Error(result.stderr || 'FFmpeg a échoué pendant le test Fidélité photo.');
+      return result;
+    };
+    try {
+      run(['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=640x360:r=1', '-frames:v', '1', place]);
+      await writeFile(vehicle, makePngWithAlpha(160, 100));
+      expect(hasTransparentPngPixels(await readFile(vehicle))).toBe(true);
+      run(makePhotoFidelityShotArgs({ backgroundFile: place, vehicleFile: vehicle, outputFile: shot, durationSeconds: 5, format: '16:9' }));
+      run(makeMultiClipMontageArgs({ shotFiles: [shot], shotDurations: [5], logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: output, clipDurationSeconds: 5, finalDurationSeconds: 7, singleStoryboardMode: true, format: '16:9', qualityCrf: 10 }));
+      expect((await stat(output)).size).toBeGreaterThan(0);
+      expect(`${run(['-hide_banner', '-i', output, '-f', 'null', '-']).stderr}`).toContain('Duration: 00:00:07.00');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 90_000);
 });
+
+function makePngWithAlpha(width: number, height: number) {
+  const rowLength = width * 4;
+  const scanlines = Buffer.alloc((rowLength + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    const rowStart = y * (rowLength + 1) + 1;
+    for (let x = 0; x < width; x += 1) {
+      const offset = rowStart + x * 4;
+      scanlines[offset] = 210;
+      scanlines[offset + 1] = 20;
+      scanlines[offset + 2] = 20;
+      scanlines[offset + 3] = x < width / 2 ? 255 : 0;
+    }
+  }
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const encoded = Buffer.alloc(body.length + 8);
+    encoded.writeUInt32BE(data.length, 0);
+    body.copy(encoded, 4);
+    encoded.writeUInt32BE(pngCrc32(body), encoded.length - 4);
+    return encoded;
+  };
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', header), chunk('IDAT', deflateSync(scanlines)), chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+function pngCrc32(bytes: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = crc >>> 1 ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}

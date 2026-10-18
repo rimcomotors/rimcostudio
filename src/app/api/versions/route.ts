@@ -15,8 +15,9 @@ import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
 import { deleteVersionsByVideoIds } from '@/core/versions/store';
 import { aggregateGenerationCost } from '@/core/billing/aggregate';
-import { singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
+import { photoFidelityShotSchema, singleShotStoryboardSchema, storyboardSchema, validatePhotoFidelityPlan, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
 import { createLiveStoryboard } from '@/core/versions/storyboard-live';
+import { createLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { resolveGenerationTier } from '@/core/versions/generation-tier';
 
@@ -47,6 +48,14 @@ const singleStoryboardSchema = requestSchema.extend({
   message: 'Une vidéo en un seul plan utilise un seul lieu.',
   path: ['placeIds'],
 });
+const photoFidelitySchema = requestSchema.extend({
+  workflow: z.literal('photo_fidelity'),
+  storyMode: z.enum(['standard', 'pro', 'premium']),
+  clipDurationSeconds: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
+  vehicleDossierId: z.string().uuid(),
+  placeIds: z.array(z.string().uuid()).min(1).max(12),
+  storyboard: z.array(photoFidelityShotSchema).min(1).max(6),
+}).strict();
 
 export async function GET(request: Request) {
   try {
@@ -81,7 +90,8 @@ export async function GET(request: Request) {
       const canPreview = canPreviewReady || canPreviewReview || video.status === 'review' && isOwner;
       const briefData = latest?.brief_json && typeof latest.brief_json === 'object' ? latest.brief_json as Record<string, unknown> : {};
       const model = Array.isArray(latest?.model) ? latest.model[0] : latest?.model;
-      const generationTier = resolveGenerationTier(briefData.generationTier ?? briefData.storyMode, model?.tier);
+      const isPhotoFidelity = briefData.photoFidelityMode === true;
+      const generationTier = isPhotoFidelity ? null : resolveGenerationTier(briefData.generationTier ?? briefData.storyMode, model?.tier);
       const mockMetadata = briefData.mock_metadata && typeof briefData.mock_metadata === 'object' ? briefData.mock_metadata as Record<string, unknown> : {};
       const isPersistedMock = latest?.provider_request_id?.startsWith('mock:') ?? false;
       let videoUrl: string | null = null;
@@ -111,7 +121,7 @@ export async function GET(request: Request) {
       }
       if (video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, modelName: model?.name ?? null, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, previewSource, createdAt: video.created_at, department: video.department, userId: video.user_id };
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, modelName: model?.name ?? null, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, previewSource, createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
@@ -120,6 +130,14 @@ export async function POST(request: Request) {
   try {
     const actor = await getActor();
     const payload = await request.json();
+    if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'photo_fidelity') {
+      const input = photoFidelitySchema.parse(payload);
+      validatePhotoFidelityPlan(input.storyboard, input.clipDurationSeconds);
+      if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
+        return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du montage à partir des photos sources.', estimatedPriceFcfa: 0, fidelityStatus: 'Simulation — aucune image IA ni aucun modèle Fal utilisés.' }, { status: 201 });
+      }
+      return NextResponse.json(await createLivePhotoFidelity(actor, input), { status: 201 });
+    }
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'single_storyboard') {
       const single = singleStoryboardSchema.parse(payload);
       validateSingleShotStoryboard(single.storyboard, single.clipDurationSeconds, getStoryboardModeRoute(single.storyMode).adapterFamily);

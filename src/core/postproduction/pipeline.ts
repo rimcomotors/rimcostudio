@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { makeFinalVideoArgs, makeMultiClipMontageArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo } from './ffmpeg-args';
+import { makeFinalVideoArgs, makeMultiClipMontageArgs, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
 
 const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
@@ -151,6 +151,52 @@ export async function assembleShotMontage(versionId: string) {
     const { error: updateVideoError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (updateVideoError) throw new HttpError(503, 'Le montage est prêt; son état doit être réconcilié.');
     return { finalPath };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/** Render an exact-source photo montage without sending the selected images to a video model. */
+export async function renderPhotoFidelityMontage(input: {
+  shots: Array<{ background: Buffer; vehicleCutout?: Buffer; durationSeconds: number }>;
+  clipDurationSeconds: 5 | 10 | 15 | 20;
+  format: VideoFormat;
+}) {
+  if (input.shots.length < 1 || input.shots.length > 6 || input.shots.reduce((sum, shot) => sum + shot.durationSeconds, 0) !== input.clipDurationSeconds) {
+    throw new HttpError(422, 'Les références ne correspondent pas au plan de montage demandé.');
+  }
+  try { await access(ffmpegPath, constants.X_OK); }
+  catch { throw new HttpError(503, 'FFmpeg n’est pas disponible sur ce déploiement.'); }
+  try { await access(logoFile, constants.R_OK); }
+  catch { throw new HttpError(503, 'Le logo RIMCO est indisponible sur ce déploiement.'); }
+
+  const directory = await mkdtemp(join(tmpdir(), 'rimco-photo-fidelity-'));
+  const clipFiles = input.shots.map((_, index) => join(directory, `shot-${index + 1}.mp4`));
+  const outputFile = join(directory, 'final.mp4');
+  try {
+    for (let index = 0; index < input.shots.length; index += 1) {
+      const shot = input.shots[index];
+      const backgroundFile = join(directory, `place-${index + 1}.image`);
+      const vehicleFile = shot.vehicleCutout ? join(directory, `vehicle-${index + 1}.png`) : undefined;
+      await Promise.all([writeFile(backgroundFile, shot.background), ...(vehicleFile ? [writeFile(vehicleFile, shot.vehicleCutout!)] : [])]);
+      await runFfmpeg(ffmpegPath, makePhotoFidelityShotArgs({ backgroundFile, ...(vehicleFile ? { vehicleFile } : {}), outputFile: clipFiles[index], durationSeconds: shot.durationSeconds, format: input.format }));
+    }
+    await runFfmpeg(ffmpegPath, makeMultiClipMontageArgs({
+      shotFiles: clipFiles,
+      shotDurations: input.shots.map((shot) => shot.durationSeconds),
+      logoFile,
+      outputFile,
+      finalDurationSeconds: input.clipDurationSeconds + 2,
+      clipDurationSeconds: input.clipDurationSeconds,
+      singleStoryboardMode: input.shots.length === 1,
+      qualityCrf: 10,
+      format: input.format,
+    }));
+    const outputStat = await stat(outputFile);
+    if (outputStat.size > MAX_VIDEO_BYTES) throw new HttpError(502, 'La vidéo finale dépasse la taille autorisée.');
+    const output = await readFile(outputFile);
+    validateMp4(output);
+    return output;
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

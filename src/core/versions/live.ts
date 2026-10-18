@@ -14,6 +14,7 @@ import type { z } from 'zod';
 import { requestSchema } from './request-schema';
 import { beginPostproduction, retryPostproduction } from '@/core/postproduction/pipeline';
 import { approveCompletedAdminVideo } from '@/core/versions/approval';
+import { refreshLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 import { calculateClientPriceFcfa } from '@/core/pricing';
 import { refreshLiveStoryboard } from './storyboard-live';
@@ -251,12 +252,13 @@ function acceptedFalUrl(rawUrl: string): URL | null {
 
 export async function refreshLiveVersion(versionId: string, actor: Actor) {
   const admin = createStorageAdminClient();
-  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,fal_credential_id,status,raw_path,final_path,updated_at,brief_json,model:ai_models!inner(adapter_family,fal_endpoint_id),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
+  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,fal_credential_id,status,raw_path,final_path,updated_at,brief_json,model:ai_models(adapter_family,fal_endpoint_id),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   const ownsVideo = video?.user_id === actor.id;
   const canReview = actor.role === 'valideur' && video?.status === 'review' && video.brand_id === actor.brandId && video.department === actor.department;
   if (!video || !ownsVideo && !canReview && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
+  if (version.brief_json && typeof version.brief_json === 'object' && (version.brief_json as Record<string, unknown>).photoFidelityMode === true) return refreshLivePhotoFidelity(versionId, actor);
   if (version.brief_json && typeof version.brief_json === 'object' && 'storyboard' in version.brief_json) return refreshLiveStoryboard(versionId, actor);
   if (version.status === 'failed') return { id: versionId, status: version.status };
   if (version.status === 'ready') {

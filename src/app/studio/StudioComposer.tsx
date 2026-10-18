@@ -7,7 +7,7 @@ import { formatFcfa } from '@/core/pricing';
 import { getScenePresets, getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
 
 type Format = '16:9' | '9:16' | '1:1';
-type Job = { id: string; status: string; error?: string; prompt?: string; completedShots?: number; totalShots?: number; estimatedPriceFcfa?: number };
+type Job = { id: string; status: string; error?: string; prompt?: string; completedShots?: number; totalShots?: number; estimatedPriceFcfa?: number; fidelityStatus?: string };
 type Model = { id: string; name: string; tier: string; adapterFamily: string; formats: Format[]; durations: number[]; estimatedPricesFcfa: Record<string, number>; isDefault: boolean; isReference: boolean };
 type VehicleDossier = { id: string | null; key: string; dossierIds?: string[]; make: string; model: string; color?: string | null; variant?: string | null; photos: Array<{ id: string; photoRole: string; title: string; angle?: string | null; previewUrl?: string | null }> };
 type PlaceAsset = { id: string; title?: string; category?: string; previewUrl?: string | null; isCurated?: boolean };
@@ -39,6 +39,7 @@ function buildAutomaticShots(input: {
   durationSeconds: number;
   multiClip: boolean;
   selectedPhotoId?: string;
+  photoFidelityMode?: boolean;
 }): StoryShot[] {
   // Keep the creative shot count identical across tiers: every endpoint can run
   // these segments, while longer single shots are split by the server adapter.
@@ -75,7 +76,7 @@ function buildAutomaticShots(input: {
       camera: isFinalShot ? 'Caméra basse, push-in lent et stable sans révéler d’angle absent de la référence' : index === 0 ? 'Travelling lent et stable' : 'Mouvement doux, raccord visuel avec le plan précédent',
       durationSeconds: baseDuration + (index < remainder ? 1 : 0),
       vehiclePhotoId: photo.id,
-      locationPhotoId: place?.id ?? null,
+      locationPhotoId: input.photoFidelityMode && photo.photoRole === 'interior' ? null : place?.id ?? null,
     };
   });
   const maxClipSeconds = 10;
@@ -99,6 +100,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const conceptId = 'signature';
   const complexity = 'balanced';
   const [tier, setTier] = useState<'standard' | 'pro' | 'premium'>('standard');
+  const [photoFidelityMode, setPhotoFidelityMode] = useState(false);
   const [durationS, setDurationS] = useState(5);
   const [additionalDirection, setAdditionalDirection] = useState('');
   const [character, setCharacter] = useState('');
@@ -125,7 +127,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const sceneChoices = [...relevantScenes, ...universalScenes].slice(0, 8);
   const selectedScene = getScenePreset(scenePresetId) ?? relevantScenes[0];
   const storyboardModel = availableModels.find((model) => model.tier === tier && model.isReference && model.durations.includes(durationS) && model.formats.includes(format));
-  const estimatedPriceFcfa = storyboardModel?.estimatedPricesFcfa[String(durationS)];
+  const estimatedPriceFcfa = photoFidelityMode ? 0 : storyboardModel?.estimatedPricesFcfa[String(durationS)];
   const generationActive = Boolean(job && !['ready', 'failed'].includes(job.status));
   const lightingChoices = Array.from(new Map(sceneChoices.map((scene) => [getLightingLabel(scene.lighting), scene])).entries())
     .map(([label, scene]) => ({ label, scene }));
@@ -213,16 +215,18 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
     setBusy(true);
     try {
       if (!selectedDossier?.id || !selectedDossier.photos.length) throw new Error('Choisissez un véhicule avec au moins une photo validée.');
-      const shots = buildAutomaticShots({ vehicle: selectedDossier, places, placeIds: effectivePlaceIds, durationSeconds: durationS, multiClip, selectedPhotoId: assetId });
+      const shots = buildAutomaticShots({ vehicle: selectedDossier, places, placeIds: effectivePlaceIds, durationSeconds: durationS, multiClip, selectedPhotoId: assetId, photoFidelityMode });
       const firstPhoto = selectedDossier.photos.find((photo) => photo.id === shots[0].vehiclePhotoId) ?? selectedDossier.photos[0];
       const workflow = multiClip ? 'multi_clip' : 'single_storyboard';
-      const payload = multiClip
+      const payload = photoFidelityMode
+        ? { workflow: 'photo_fidelity', description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), placeIds: effectivePlaceIds, storyMode: tier, clipDurationSeconds: durationS, storyboard: shots.map((shot) => ({ title: shot.title, durationSeconds: shot.durationSeconds, vehiclePhotoId: shot.vehiclePhotoId, locationPhotoId: shot.locationPhotoId ?? null })), format, tier, durationS, overlayLogo: true, complexity: 'balanced' }
+        : multiClip
         ? { workflow, description: additionalDirection, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), placeIds: effectivePlaceIds, storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots, storyboardLedgerIds: [], format, tier: 'standard', durationS: 5, overlayLogo: true, complexity: 'balanced' }
         : { workflow, storyMode: tier, clipDurationSeconds: durationS, purpose, storyboard: shots, storyboardLedgerIds: [], description: additionalDirection, conceptId, title, assetId: firstPhoto.id, vehicleDossierId: selectedDossier.id, vehicleDossierIds: selectedDossier.dossierIds ?? [selectedDossier.id], vehiclePhotoIds: selectedDossier.photos.map((photo) => photo.id), locationAssetId: effectivePlaceIds[0] ?? null, character, format, tier, durationS, overlayLogo, complexity, placeIds: effectivePlaceIds.slice(0, 1), scenePresetId: selectedScene?.id ?? '', vehicleCategory, location: selectedScene?.location ?? '', setting: selectedScene?.setting ?? '', lighting: selectedScene?.lighting ?? lightOptions[0], vehicleAction: selectedScene?.vehicleAction ?? 'Le véhicule avance lentement et régulièrement', cameraMovement: selectedScene?.cameraMovement ?? '', mood: selectedScene?.mood ?? '', ...(mode === 'live' && storyboardModel ? { modelId: storyboardModel.id } : {}) };
       const response = await fetch('/api/versions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'La génération n’a pas pu démarrer.');
-      setJob({ id: data.id, status: data.status, prompt: data.prompt, completedShots: data.completedShots, totalShots: data.totalShots, estimatedPriceFcfa: data.estimatedPriceFcfa });
+      setJob({ id: data.id, status: data.status, prompt: data.prompt, completedShots: data.completedShots, totalShots: data.totalShots, estimatedPriceFcfa: data.estimatedPriceFcfa, fidelityStatus: data.fidelityStatus });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Une erreur est survenue.');
     } finally {
@@ -250,10 +254,14 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
           </div>
         </section>
 
-        {job && <section className="rounded-md border border-black/[.055] bg-white p-5"><div className="flex items-center justify-between"><h2 className="text-sm font-semibold">État de la vidéo</h2><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : 'En cours'}</span></div><p className="mt-2 text-xs leading-5 text-[#88847d]">{job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.status === 'failed' ? job.error ?? 'La génération a échoué. Vous pouvez relancer une nouvelle vidéo.' : 'Actualisation automatique toutes les 10 secondes.'}</p>{typeof job.estimatedPriceFcfa === 'number' && <p className="mt-3 border-t border-[#eeeae4] pt-3 text-xs font-semibold text-[#716d66]">Montant total estimé · environ {formatFcfa(job.estimatedPriceFcfa)}</p>}{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}</section>}
+      {job && <section className="rounded-md border border-black/[.055] bg-white p-5"><div className="flex items-center justify-between"><h2 className="text-sm font-semibold">État de la vidéo</h2><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : 'En cours'}</span></div><p className="mt-2 text-xs leading-5 text-[#88847d]">{job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.status === 'failed' ? job.error ?? 'La génération a échoué. Vous pouvez relancer une nouvelle vidéo.' : 'Actualisation automatique toutes les 10 secondes.'}</p>{job.fidelityStatus && <p className="mt-3 rounded-md bg-[#f8f7f4] p-3 text-[10px] leading-4 text-[#716d66]">{job.fidelityStatus}</p>}{typeof job.estimatedPriceFcfa === 'number' && <p className="mt-3 border-t border-[#eeeae4] pt-3 text-xs font-semibold text-[#716d66]">{job.fidelityStatus ? 'Montage photo · aucun appel vidéo IA' : `Montant total estimé · environ ${formatFcfa(job.estimatedPriceFcfa)}`}</p>}{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}</section>}
       </div>
 
       <aside id="generation-options" className="min-w-0 space-y-3 xl:sticky xl:top-5">
+        <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
+          <fieldset><legend className="mb-2 text-[11px] font-semibold">Méthode de création</legend><div className="grid grid-cols-2 gap-1.5"><button type="button" onClick={() => { setPhotoFidelityMode(false); clearFormError(); }} aria-pressed={!photoFidelityMode} className={`rounded-full border px-2.5 py-2 text-[10px] ${!photoFidelityMode ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>Génération IA</button><button type="button" onClick={() => { setPhotoFidelityMode(true); clearFormError(); }} aria-pressed={photoFidelityMode} className={`rounded-full border px-2.5 py-2 text-[10px] ${photoFidelityMode ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>Fidélité photo</button></div><p className="mt-2 text-[9px] leading-4 text-[#88847d]">{photoFidelityMode ? 'Montage déterministe des photos sources. Les vues extérieures doivent être des PNG réellement détourés; les vues intérieures restent des photos plein cadre. Aucun modèle vidéo IA. Le score SSIM n’est pas encore mesuré automatiquement.' : 'Wan, Kling ou Seedance animent les références; leur fidélité exacte n’est pas garantie.'}</p></fieldset>
+        </section>
+
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
           <fieldset><legend className="mb-2 text-[11px] font-semibold">Durée de la vidéo</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => { setDurationS(seconds); clearFormError(); if (seconds < 10 && placeIds.length > 1) setPlaceIds((current) => current.slice(0, 1)); }} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">{durationS} s de clips + 2 s de logo animé = {durationS + 2} s au total.</p></fieldset>
         </section>
@@ -280,18 +288,18 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
           <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(['16:9', '9:16', '1:1'] as const).map((value) => <button type="button" key={value} onClick={() => { setFormat(value); clearFormError(); }} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
-          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); clearFormError(); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Clips générés : {durationS} s · vidéo finale avec logo : {durationS + 2} s.</p></fieldset>
-          {mode === 'live' && modelsError && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">{modelsError}</p>}
-          {mode === 'live' && !modelsLoading && !modelsError && !storyboardModel && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">Aucune option disponible pour cette durée et ce format. Choisissez un autre niveau ou format.</p>}
+          {!photoFidelityMode && <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); clearFormError(); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Clips générés : {durationS} s · vidéo finale avec logo : {durationS + 2} s.</p></fieldset>}
+          {!photoFidelityMode && mode === 'live' && modelsError && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">{modelsError}</p>}
+          {!photoFidelityMode && mode === 'live' && !modelsLoading && !modelsError && !storyboardModel && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">Aucune option disponible pour cette durée et ce format. Choisissez un autre niveau ou format.</p>}
           {mode === 'mock' && <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Simulation active : aucune vidéo payante ne sera générée.</p>}
-          {mode === 'live' && estimatedPriceFcfa != null && <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] text-[#88847d]">Estimation vidéo · environ {formatFcfa(estimatedPriceFcfa)}</p>}
+          {photoFidelityMode ? <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] leading-4 text-[#88847d]">Aucun appel Fal ni coût de génération vidéo IA. Le montage est assemblé à partir des images sources.</p> : mode === 'live' && estimatedPriceFcfa != null && <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] text-[#88847d]">Estimation vidéo · environ {formatFcfa(estimatedPriceFcfa)}</p>}
           <p className="mt-4 border-t border-[#eeeae4] pt-4 text-[10px] leading-4 text-[#88847d]">La vidéo sera générée directement. Les plans et les lieux suivront automatiquement vos choix.</p>
         </section>
         <p className="px-1 text-[10px] leading-4 text-[#88847d]">{multiClip ? 'Les vues et lieux sélectionnés déterminent les plans, assemblés automatiquement.' : 'Un plan créatif. Si nécessaire, le modèle le répartit en plusieurs clips avant le montage final.'}</p>
       </aside>
       <div className="space-y-3 xl:col-span-2">
         {error && <div role="alert" className="rounded-md border border-red-100 bg-red-50 p-4 text-xs leading-5 text-red-800"><p>{error}</p><button type="submit" disabled={busy} className="mt-2 font-semibold underline underline-offset-2">Réessayer la génération</button></div>}
-        <button type="submit" disabled={busy || generationActive || !selectedDossier?.id || !selectedDossier.photos.length || mode === 'live' && (!storyboardModel || modelsLoading)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Lancement de la génération…' : generationActive ? 'Génération en cours…' : `Générer la vidéo · ${durationS} s`}</button>
+        <button type="submit" disabled={busy || generationActive || !selectedDossier?.id || !selectedDossier.photos.length || !photoFidelityMode && mode === 'live' && (!storyboardModel || modelsLoading)} aria-describedby={generationActive ? 'generation-lock-message' : undefined} className="w-full rounded-md bg-[#c51e1c] px-4 py-4 text-sm font-semibold text-white transition hover:bg-[#a71715] disabled:cursor-not-allowed disabled:opacity-50">{busy ? 'Lancement de la génération…' : generationActive ? 'Génération en cours…' : `${photoFidelityMode ? 'Assembler les photos' : 'Générer la vidéo'} · ${durationS} s`}</button>
         <p className="text-center text-[10px] text-[#88847d]">Lancement direct : les vues et lieux sélectionnés déterminent automatiquement les plans.</p>
       </div>
     </form>

@@ -25,6 +25,15 @@ type MultiClipMontageArgs = {
   finalDurationSeconds: number;
   clipDurationSeconds?: 5 | 10 | 15 | 20;
   singleStoryboardMode?: boolean;
+  qualityCrf?: number;
+  format?: VideoFormat;
+};
+
+type PhotoFidelityShotArgs = {
+  backgroundFile: string;
+  vehicleFile?: string;
+  outputFile: string;
+  durationSeconds: number;
   format?: VideoFormat;
 };
 
@@ -39,6 +48,21 @@ const OUTPUT_DIMENSIONS: Record<VideoFormat, [number, number]> = {
 
 export function normalizeVideoFormat(value: unknown): VideoFormat {
   return value === '9:16' || value === '1:1' || value === '4:5' ? value : '16:9';
+}
+
+/** Build one deterministic shot from the original location image and optional alpha vehicle cutout. */
+export function makePhotoFidelityShotArgs(input: PhotoFidelityShotArgs) {
+  const format = normalizeVideoFormat(input.format);
+  const [width, height] = OUTPUT_DIMENSIONS[format];
+  const args = ['-hide_banner', '-loglevel', 'error', '-y', '-loop', '1', '-framerate', '30', '-i', input.backgroundFile];
+  let composition = '[0:v:0]scale=' + width + ':' + height + ':force_original_aspect_ratio=increase,crop=' + width + ':' + height + ',setsar=1[background]';
+  if (input.vehicleFile) {
+    args.push('-loop', '1', '-framerate', '30', '-i', input.vehicleFile);
+    composition += `;[1:v:0]format=rgba,scale=${Math.round(width * 0.62)}:${Math.round(height * 0.7)}:force_original_aspect_ratio=decrease[vehicle];[background][vehicle]overlay=x=(W-w)/2:y=(H-h)/2:format=auto:shortest=1[scene]`;
+  } else composition += ';[background]copy[scene]';
+  composition += `;[scene]zoompan=z='min(zoom+0.00008,1.025)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${width}x${height}:fps=30,trim=duration=${input.durationSeconds},setpts=PTS-STARTPTS,format=yuv420p[vout]`;
+  args.push('-filter_complex', composition, '-map', '[vout]', '-an', '-t', String(input.durationSeconds), '-r', '30', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '10', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', input.outputFile);
+  return args;
 }
 
 function normalizeVideoFilter(format: VideoFormat, source: string, output: string) {
@@ -107,7 +131,8 @@ export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
   filters.push(`[footage_all]trim=duration=${footageSeconds},setpts=PTS-STARTPTS[footage]`);
   filters.push(`color=c=white:s=${width}x${height}:r=30:d=2[card];[${input.shotFiles.length}:v:0]format=rgba,scale=w='iw*(0.9+0.1*min(t/0.6,1))':h=-1:eval=frame[logo];[card][logo]overlay=(W-w)/2:(H-h)/2:format=auto,fade=t=in:st=0:d=0.45,fade=t=out:st=1.55:d=0.45[brand]`);
   filters.push('[footage][brand]concat=n=2:v=1:a=0[vout]');
-  args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-t', String(input.finalDurationSeconds), input.outputFile);
+  const qualityCrf = Number.isInteger(input.qualityCrf) && input.qualityCrf! >= 0 && input.qualityCrf! <= 51 ? input.qualityCrf! : 20;
+  args.push('-filter_complex', filters.join(';'), '-map', '[vout]', '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', String(qualityCrf), '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-t', String(input.finalDurationSeconds), input.outputFile);
   return args;
 }
 

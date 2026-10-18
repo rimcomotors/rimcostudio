@@ -22,6 +22,22 @@ export const storyboardSchema = z.array(shotDraftSchema).min(2).max(6);
 export const singleShotStoryboardSchema = z.array(shotDraftSchema).length(1);
 export type StoryboardShot = z.infer<typeof shotDraftSchema>;
 
+export const photoFidelityShotSchema = z.object({
+  title: z.string().trim().min(1).max(80),
+  durationSeconds: z.number().int().min(1).max(20),
+  vehiclePhotoId: z.string().trim().min(1).max(100),
+  locationPhotoId: z.string().trim().min(1).max(100).nullable().optional(),
+}).strict();
+export type PhotoFidelityShot = z.infer<typeof photoFidelityShotSchema>;
+
+export function validatePhotoFidelityPlan(shots: PhotoFidelityShot[], durationSeconds: ClipDurationSeconds): true {
+  const parsed = z.array(photoFidelityShotSchema).min(1).max(6).parse(shots);
+  if (durationSeconds === 5 && parsed.length !== 1) throw new Error('Une vidéo de 5 secondes utilise un seul plan.');
+  if (durationSeconds === 5 && !parsed[0].locationPhotoId) throw new Error('Un plan de 5 secondes doit utiliser un lieu réel sélectionné.');
+  if (parsed.reduce((sum, shot) => sum + shot.durationSeconds, 0) !== durationSeconds) throw new Error(`La durée des plans doit être exactement de ${durationSeconds} secondes avant le logo.`);
+  return true;
+}
+
 export const STORYBOARD_LOGO_SECONDS = 2;
 const providerLimits: Record<StoryProvider, { min: number; max: number }> = {
   wan: { min: 2, max: 10 },
