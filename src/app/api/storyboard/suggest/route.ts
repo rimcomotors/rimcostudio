@@ -8,6 +8,7 @@ import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, getSi
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { createFalLlmProvider, FalLlmBriefError } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
+import { getActiveFalCredential } from '@/core/providers/fal-credential-vault';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
 import { findCuratedLocation } from '@/core/assets/location-catalog';
 import { calculateClientPriceFcfa } from '@/core/pricing';
@@ -27,6 +28,7 @@ const singleShotStoryboardResponseSchema = z.object({ shots: singleShotStoryboar
 
 export async function POST(request: Request) {
   const referenceId = crypto.randomUUID();
+  let falApiKeyForRedaction: string | null = null;
   try {
     const actor = await getActor();
     if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
@@ -91,8 +93,10 @@ export async function POST(request: Request) {
       shots = input.workflow === 'single' ? singleShotStoryboardSchema.parse(drafts) : storyboardSchema.parse(drafts);
       totalEstimatedPriceFcfa = 0;
     } else {
-      if (!env.FAL_KEY || !env.LLM_MODEL) throw new HttpError(503, 'Le modèle de storyboard IA n’est pas configuré.');
       const admin = createStorageAdminClient();
+      if (!env.LLM_MODEL) throw new HttpError(503, 'Le modèle de storyboard IA n’est pas configuré.');
+      const falCredential = await getActiveFalCredential(admin);
+      falApiKeyForRedaction = falCredential.apiKey;
       const { data: videoModel } = await admin.from('ai_models').select('price_usd_per_second').eq('fal_endpoint_id', route.endpoint).eq('is_active', true).maybeSingle();
       const { data: reservation, error: reservationError } = await reserveLlmCost(admin, {
         userId: actor.id, department: actor.department, maxCostUsd: 0.02,
@@ -102,7 +106,7 @@ export async function POST(request: Request) {
       storyboardLedgerId = reservation;
       try {
         const provider = createFalLlmProvider(async (prompt, system) => {
-          const fal = createFalClient({ credentials: env.FAL_KEY! });
+          const fal = createFalClient({ credentials: falCredential.apiKey });
           return fal.subscribe('openrouter/router', { input: {
             prompt, system_prompt: system, model: env.LLM_MODEL!, temperature: 0.2, max_tokens: 2400,
           } as never });
@@ -151,7 +155,7 @@ export async function POST(request: Request) {
     const providerCause = error instanceof FalLlmBriefError ? error.providerCause : undefined;
     const detail = (cause: unknown) => {
       const message = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause ?? 'Erreur inconnue');
-      return env.FAL_KEY ? message.replaceAll(env.FAL_KEY, '[masqué]') : message;
+      return [falApiKeyForRedaction, env.FAL_KEY].filter((secret): secret is string => Boolean(secret)).reduce((safe, secret) => safe.replaceAll(secret, '[masqué]'), message);
     };
     console.error(`[storyboard-suggest:${referenceId}]`, {
       error: detail(error),

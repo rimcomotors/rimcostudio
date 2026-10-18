@@ -5,9 +5,10 @@ import type { ProviderStatus, VideoProvider } from './contracts';
 export const VEO_ENDPOINT = 'fal-ai/veo3.1/fast/image-to-video';
 const VEO_SOURCE_DURATION = 6;
 
-function client() {
-  if (!env.FAL_KEY) throw new Error('FAL_KEY manque : configurez la clé fal.ai dans Vercel.');
-  return createFalClient({ credentials: env.FAL_KEY });
+function client(apiKey?: string) {
+  const credentials = apiKey ?? env.FAL_KEY;
+  if (!credentials) throw new Error('Aucune clé Fal n’est configurée.');
+  return createFalClient({ credentials });
 }
 
 function normalizeStatus(status: string): ProviderStatus {
@@ -22,10 +23,10 @@ function normalizeStatus(status: string): ProviderStatus {
 
 /** Veo 3.1 Fast generates six seconds; post-production trims the delivered MP4 to five. */
 export const veoVideoProvider: VideoProvider = {
-  async submit(input) {
+  async submit(input, apiKey) {
     if (input.durationS !== VEO_SOURCE_DURATION) throw new Error('Veo 3.1 Fast nécessite une réservation pour six secondes source.');
     if (input.format !== '16:9' && input.format !== '9:16') throw new Error('Veo 3.1 Fast prend uniquement en charge 16:9 ou 9:16.');
-    const result = await client().queue.submit(VEO_ENDPOINT, { input: {
+    const result = await client(apiKey).queue.submit(VEO_ENDPOINT, { input: {
       prompt: input.prompt,
       image_url: input.imageUrl,
       aspect_ratio: input.format,
@@ -35,8 +36,8 @@ export const veoVideoProvider: VideoProvider = {
     } });
     return { requestId: result.request_id };
   },
-  async status(requestId) {
-    const fal = client();
+  async status(requestId, apiKey) {
+    const fal = client(apiKey);
     const result = await fal.queue.status(VEO_ENDPOINT, { requestId, logs: false });
     const status = normalizeStatus(result.status);
     if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération fal.ai a échoué.' } : {}) };

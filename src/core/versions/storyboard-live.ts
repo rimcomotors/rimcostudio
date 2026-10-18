@@ -16,6 +16,7 @@ import { findCuratedLocation, locationCatalog } from '@/core/assets/location-cat
 import { createFalClient } from '@fal-ai/client';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { getActiveFalCredential, getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
 
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
@@ -96,6 +97,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const costUsd = generatedSeconds * Number(model.price_usd_per_second);
   const priceFcfa = calculateClientPriceFcfa(costUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
 
+  const falCredential = await getActiveFalCredential(admin);
   const { data: video, error: videoError } = await admin.from('videos').insert({
     user_id: actor.id, brand_id: actor.brandId,
     title: input.title || `${dossier.make ?? ''} ${dossier.model ?? 'Véhicule'} · storyboard ${route.label}`.trim(),
@@ -105,7 +107,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, placeIds: input.placeIds, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: prompts.join('\n\n--- Plan suivant ---\n\n'),
-    ai_model_id: model.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
+    ai_model_id: model.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
   }).select('id,number').single();
   if (versionError || !version) {
     await admin.from('videos').delete().eq('id', video.id);
@@ -157,7 +159,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     throw new HttpError(503, 'Impossible d’enregistrer les plans du montage.');
   }
 
-  const falStorage = env.FAL_KEY ? createFalClient({ credentials: env.FAL_KEY }).storage : null;
+  const falStorage = createFalClient({ credentials: falCredential.apiKey }).storage;
   const curatedUploads = new Map<string, Promise<string>>();
   const submissions = await Promise.allSettled(generationShots.map(async (shot, index) => {
     const vehiclePhoto = vehiclePhotos.find((photo) => photo.id === shot.vehiclePhotoId);
@@ -180,7 +182,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
       if (error || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer une image de référence.');
       return signed.signedUrl;
     }));
-    return provider.submit({ prompt: prompts[index], referenceImageUrls: refs, durationS: shot.durationSeconds, aspectRatio: input.format, endUserId: actor.id });
+    return provider.submit({ prompt: prompts[index], referenceImageUrls: refs, durationS: shot.durationSeconds, aspectRatio: input.format, endUserId: actor.id }, falCredential.apiKey);
   }));
   let submitted = 0;
   const submissionErrors: string[] = [];
@@ -190,7 +192,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
       submitted += 1;
       await admin.from('video_shots').update({ provider_request_id: submission.value.requestId, status: 'generating', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
     } else {
-      const detail = safeProviderError(submission.reason);
+      const detail = safeProviderError(submission.reason, falCredential.apiKey);
       submissionErrors.push(detail);
       await admin.from('video_shots').update({ status: 'failed', error_message: detail, updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
     }
@@ -212,13 +214,13 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
 export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const admin = createStorageAdminClient();
   const { data: version, error } = await admin.from('video_versions')
-    .select('id,video_id,status,final_path,ai_model_id,brief_json,model:ai_models!inner(adapter_family,price_usd_per_second),video:videos!inner(id,user_id,status)')
+    .select('id,video_id,status,final_path,ai_model_id,fal_credential_id,brief_json,model:ai_models!inner(adapter_family,price_usd_per_second),video:videos!inner(id,user_id,status)')
     .eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   if (!video || video.user_id !== actor.id && actor.role !== 'admin') throw new HttpError(404, 'Cette version est introuvable.');
   if (version.status === 'ready' && version.final_path) return { id: versionId, status: 'ready' as const, videoUrl: await signedUrl(admin, version.final_path) };
-  if (version.status === 'failed') return { id: versionId, status: 'failed' as const, error: 'Un plan n’a pas pu être généré.' };
+  if (version.status === 'failed') { await pruneRetiredFalCredentials(admin); return { id: versionId, status: 'failed' as const, error: 'Un plan n’a pas pu être généré.' }; }
 
   const { data: shots, error: shotsError } = await admin.from('video_shots')
     .select('shot_number,duration_seconds,provider_request_id,status,raw_path,error_message')
@@ -230,9 +232,15 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const adapterFamily: 'wan' | 'kling' | 'seedance' = model?.adapter_family === 'wan' ? 'wan' : model?.adapter_family === 'seedance' ? 'seedance' : 'kling';
   const multiClip = version.brief_json && typeof version.brief_json === 'object' && (version.brief_json as { multiClipMode?: unknown }).multiClipMode === true;
   const statusProvider = multiClip || singleStoryboardMode ? providers[adapterFamily] : klingVideoProvider;
+  const falCredential = await getFalCredentialById(version.fal_credential_id, admin);
 
   await Promise.all(shots.filter((shot) => shot.status === 'generating' && shot.provider_request_id).map(async (shot) => {
-    const state = await statusProvider.status(shot.provider_request_id);
+    let state;
+    try {
+      state = await statusProvider.status(shot.provider_request_id, falCredential.apiKey);
+    } catch {
+      throw new HttpError(502, `Le suivi Fal du plan ${shot.shot_number} a échoué. Réessayez dans un instant.`);
+    }
     if (state.status === 'failed') {
       await admin.from('video_shots').update({ status: 'failed', error_message: state.error ?? 'La génération fal a échoué.', updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shot.shot_number).eq('status', 'generating');
       return;
@@ -273,6 +281,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       admin.from('video_versions').update({ status: 'failed', error_message: errorMessage, updated_at: new Date().toISOString() }).eq('id', versionId),
       admin.from('videos').update({ status: 'failed', updated_at: new Date().toISOString() }).eq('id', version.video_id),
     ]);
+    await pruneRetiredFalCredentials(admin);
     return { id: versionId, status: 'failed' as const, error: errorMessage, completedShots, totalShots: latestShots.length };
   }
 
@@ -281,6 +290,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   }
   try {
     const { finalPath } = await assembleShotMontage(versionId);
+    await pruneRetiredFalCredentials(admin);
     return { id: versionId, status: 'ready' as const, videoUrl: await signedUrl(admin, finalPath), completedShots: latestShots.length, totalShots: latestShots.length };
   } catch (cause) {
     return { id: versionId, status: 'postprocessing' as const, error: cause instanceof Error ? cause.message : 'Le montage sera repris automatiquement.', completedShots: latestShots.length, totalShots: latestShots.length };

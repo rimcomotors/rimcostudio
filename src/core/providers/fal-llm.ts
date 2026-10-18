@@ -108,8 +108,8 @@ export function createFalLlmProvider(call: LlmCall) {
   };
 }
 
-function falCall(): LlmCall {
-  const fal = createFalClient({ credentials: env.FAL_KEY ?? '' });
+function falCall(apiKey = env.FAL_KEY ?? ''): LlmCall {
+  const fal = createFalClient({ credentials: apiKey });
   const subscribe = fal.subscribe as unknown as FalSubscribe;
   return async (prompt, system_prompt) => subscribe(FAL_LLM_ENDPOINT, {
     input: buildFalLlmInput(prompt, system_prompt, env.LLM_MODEL ?? ''),
@@ -124,8 +124,8 @@ export const falLlmProvider: LlmProvider = {
   },
 };
 
-export async function buildFalBriefWithCost(description: string, options: Record<string, string>) {
-  if (!env.FAL_KEY) throw new Error('FAL_KEY manque : configurez la clé fal.ai dans Vercel.');
+export async function buildFalBriefWithCost(description: string, options: Record<string, string>, apiKey = env.FAL_KEY) {
+  if (!apiKey) throw new Error('Aucune clé Fal n’est configurée. Ajoutez-la dans Administration → Connexion Fal.');
   if (!env.LLM_MODEL) throw new Error('LLM_MODEL manque : choisissez un modèle disponible sur fal.ai.');
-  return createFalLlmProvider(falCall()).buildBriefWithCost(description, options);
+  return createFalLlmProvider(falCall(apiKey)).buildBriefWithCost(description, options);
 }

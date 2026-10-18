@@ -25,6 +25,7 @@ import { findCuratedLocation, locationCatalog } from '@/core/assets/location-cat
 import { createFalClient } from '@fal-ai/client';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { getActiveFalCredential, getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
 
 export type CreateVersionInput = z.infer<typeof requestSchema>;
 
@@ -120,10 +121,11 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const estimatedProviderCostUsd = sourceDurationS * Number(model.price_usd_per_second);
   const priceFcfa = calculateClientPriceFcfa(estimatedProviderCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
   const videoTitle = input.title || `${vehicleMake ?? ''} ${vehicleModel ?? 'Véhicule'} · Nouvelle création`.trim();
+  const falCredential = await getActiveFalCredential(admin);
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: videoTitle, department: actor.department, status: 'generating' }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
   const generationTier = input.tier === 'test' ? 'premium' : input.tier;
-  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, brief_json: { ...initialBrief, generationTier, overlayLogo: input.overlayLogo, ...(referenceMode ? { referenceVideoMode: true, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: referenceAssets.map((photo) => photo.id), locationAssetId: selectedLocation?.id ?? null } : {}) }, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
+  const { data: version, error: versionError } = await admin.from('video_versions').insert({ video_id: video.id, number: 1, fal_credential_id: falCredential.id, brief_json: { ...initialBrief, generationTier, overlayLogo: input.overlayLogo, ...(referenceMode ? { referenceVideoMode: true, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: referenceAssets.map((photo) => photo.id), locationAssetId: selectedLocation?.id ?? null } : {}) }, generated_prompt: '', ai_model_id: model.id, audio_asset_id: input.audioAssetId ?? null, status: 'queued', generation_seconds: input.durationS }).select('id,number').single();
   if (versionError || !version) {
     await admin.from('videos').delete().eq('id', video.id);
     throw new HttpError(500, 'Impossible de créer la version de la vidéo. Réessayez.');
@@ -161,7 +163,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   }
 
   try {
-    const generated = await buildFalBriefWithCost(input.description, llmBriefOptions);
+    const generated = await buildFalBriefWithCost(input.description, llmBriefOptions, falCredential.apiKey);
     llmCallCompleted = true;
     llmReportedCostUsd = generated.costUsd;
     brief = generated.brief as Brief;
@@ -199,7 +201,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   let requestId: string;
   try {
     if (referenceMode && referenceAdapter) {
-      const falStorage = env.FAL_KEY ? createFalClient({ credentials: env.FAL_KEY }).storage : null;
+      const falStorage = createFalClient({ credentials: falCredential.apiKey }).storage;
       const refs = await Promise.all(referenceAssets.slice(0, Math.max(1, referenceAdapter.maxReferenceImages - (selectedLocation ? 1 : 0))).map(async (photo) => {
         if (photo.id === asset.id && image.signedUrl) return image.signedUrl;
         const { data: signed, error: signedError } = await admin.storage.from('assets').createSignedUrl(photo.path, 3600);
@@ -220,10 +222,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
           refs.push(signed.signedUrl);
         }
       }
-      ({ requestId } = await referenceAdapter.submit({ prompt, referenceImageUrls: refs, durationS: input.durationS, aspectRatio: input.format, endUserId: actor.id }));
+      ({ requestId } = await referenceAdapter.submit({ prompt, referenceImageUrls: refs, durationS: input.durationS, aspectRatio: input.format, endUserId: actor.id }, falCredential.apiKey));
     } else {
       const provider = model.adapter_family === 'wan' ? wanVideoProvider : model.adapter_family === 'veo' ? veoVideoProvider : model.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
-      ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6 | 10 | 15 | 20 | 30, format: input.format, endUserId: actor.id }));
+      ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6 | 10 | 15 | 20 | 30, format: input.format, endUserId: actor.id }, falCredential.apiKey));
     }
   } catch {
     await Promise.all([
@@ -249,7 +251,7 @@ function acceptedFalUrl(rawUrl: string): URL | null {
 
 export async function refreshLiveVersion(versionId: string, actor: Actor) {
   const admin = createStorageAdminClient();
-  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,status,raw_path,final_path,updated_at,brief_json,model:ai_models!inner(adapter_family,fal_endpoint_id),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
+  const { data: version, error } = await admin.from('video_versions').select('id,video_id,number,provider_request_id,fal_credential_id,status,raw_path,final_path,updated_at,brief_json,model:ai_models!inner(adapter_family,fal_endpoint_id),video:videos!inner(id,user_id,status,brand_id,department)').eq('id', versionId).single();
   if (error || !version) throw new HttpError(404, 'Cette version est introuvable.');
   const video = Array.isArray(version.video) ? version.video[0] : version.video;
   const ownsVideo = video?.user_id === actor.id;
@@ -284,7 +286,13 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
   const provider = referenceMode
     ? model?.fal_endpoint_id === REFERENCE_MODEL_ENDPOINTS.standard ? wanReferenceVideoProvider : model?.fal_endpoint_id === REFERENCE_MODEL_ENDPOINTS.pro ? klingReferenceVideoProvider : seedanceReferenceVideoProvider
     : model?.adapter_family === 'wan' ? wanVideoProvider : model?.adapter_family === 'veo' ? veoVideoProvider : model?.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
-  const status = await provider.status(version.provider_request_id);
+  const falCredential = await getFalCredentialById(version.fal_credential_id, admin);
+  let status;
+  try {
+    status = await provider.status(version.provider_request_id, falCredential.apiKey);
+  } catch {
+    throw new HttpError(502, 'Le suivi de génération auprès de Fal a échoué. Réessayez dans un instant.');
+  }
   let rawPath = version.raw_path as string | null;
   if (status.status === 'ready' && status.videoUrl) {
     const parsed = acceptedFalUrl(status.videoUrl);
@@ -330,6 +338,7 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
         await approveCompletedAdminVideo(admin, actor, { videoId: version.video_id, versionId });
       }
       const canDownload = ownsVideo || actor.role === 'admin';
+      if (processed.status === 'ready' || processed.status === 'failed') await pruneRetiredFalCredentials(admin);
       return { id: versionId, status: processed.status, videoUrl: canDownload ? await signedVideoUrl(admin, processed.finalPath) : undefined };
     } catch (postprodError) {
       const message = postprodError instanceof HttpError ? postprodError.message : 'La post-production a échoué.';
@@ -338,10 +347,14 @@ export async function refreshLiveVersion(versionId: string, actor: Actor) {
         admin.from('videos').update({ status: 'failed' }).eq('id', version.video_id),
         notifyVersion(admin, video.user_id, versionId, 'failed', message),
       ]);
+      await pruneRetiredFalCredentials(admin);
       return { id: versionId, status: 'failed' as const, error: message };
     }
   }
-  if (status.status === 'failed') await Promise.all([admin.from('videos').update({ status: 'failed' }).eq('id', version.video_id), notifyVersion(admin, video.user_id, versionId, 'failed', status.error ?? 'La génération a échoué.')]);
+  if (status.status === 'failed') {
+    await Promise.all([admin.from('videos').update({ status: 'failed' }).eq('id', version.video_id), notifyVersion(admin, video.user_id, versionId, 'failed', status.error ?? 'La génération a échoué.')]);
+    await pruneRetiredFalCredentials(admin);
+  }
   return { id: versionId, status: status.status, error: status.error };
 }
 

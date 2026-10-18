@@ -20,14 +20,15 @@ export type ReferenceVideoProvider = {
   maxReferenceImages: number;
   minDurationS: number;
   maxDurationS: number;
-  submit(input: ReferenceVideoInput): Promise<{ requestId: string }>;
-  status(requestId: string): Promise<{ status: ProviderStatus; videoUrl?: string; error?: string }>;
+  submit(input: ReferenceVideoInput, apiKey?: string): Promise<{ requestId: string }>;
+  status(requestId: string, apiKey?: string): Promise<{ status: ProviderStatus; videoUrl?: string; error?: string }>;
 };
 
 /** Keep actionable provider errors while removing URLs and credential-like values. */
-export function safeProviderError(error: unknown): string {
+export function safeProviderError(error: unknown, apiKey?: string): string {
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
-  const safe = raw
+  const redacted = apiKey ? raw.replaceAll(apiKey, '[clé masquée]') : raw;
+  const safe = redacted
     .replace(/https?:\/\/\S+/gi, '[URL masquée]')
     .replace(/\b(key|token|authorization|bearer)\s*[:=]\s*[^\s,;]+/gi, '$1=[masqué]')
     .replace(/\s+/g, ' ')
@@ -36,9 +37,10 @@ export function safeProviderError(error: unknown): string {
   return safe || 'Erreur fournisseur sans détail exploitable.';
 }
 
-function client() {
-  if (!env.FAL_KEY) throw new Error('FAL_KEY manque : configurez la clé fal.ai dans Vercel.');
-  return createFalClient({ credentials: env.FAL_KEY });
+function client(apiKey?: string) {
+  const credentials = apiKey ?? env.FAL_KEY;
+  if (!credentials) throw new Error('Aucune clé Fal n’est configurée.');
+  return createFalClient({ credentials });
 }
 
 function normalizeStatus(status: string): ProviderStatus {
@@ -66,8 +68,8 @@ function promptWithImageReferences(prompt: string, count: number, marker: '@' | 
 }
 
 function createStatusReader(endpoint: string): ReferenceVideoProvider['status'] {
-  return async (requestId) => {
-    const fal = client();
+  return async (requestId, apiKey) => {
+    const fal = client(apiKey);
     const result = await fal.queue.status(endpoint, { requestId, logs: false });
     const status = normalizeStatus(result.status);
     if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération fal.ai a échoué.' } : {}) };
@@ -84,10 +86,10 @@ export const wanReferenceVideoProvider: ReferenceVideoProvider = {
   maxReferenceImages: 20,
   minDurationS: 2,
   maxDurationS: 10,
-  async submit(input) {
+  async submit(input, apiKey) {
     validateReferences(input, this);
     if (!['16:9', '9:16', '1:1', '4:3', '3:4'].includes(input.aspectRatio)) throw new Error('Format non pris en charge par Wan 2.7.');
-    const result = await client().queue.submit(WAN_REFERENCE_ENDPOINT, { input: {
+    const result = await client(apiKey).queue.submit(WAN_REFERENCE_ENDPOINT, { input: {
       prompt: promptWithImageReferences(input.prompt, input.referenceImageUrls.length),
       reference_image_urls: input.referenceImageUrls,
       // The official API example sends a JSON number; the generated SDK schema currently types it as a string enum.
@@ -108,10 +110,10 @@ export const klingReferenceVideoProvider: ReferenceVideoProvider = {
   maxReferenceImages: 4,
   minDurationS: 3,
   maxDurationS: 15,
-  async submit(input) {
+  async submit(input, apiKey) {
     validateReferences(input, this);
     if (!['16:9', '9:16', '1:1'].includes(input.aspectRatio)) throw new Error('Format non pris en charge par Kling O3.');
-    const result = await client().queue.submit(KLING_REFERENCE_ENDPOINT, { input: {
+    const result = await client(apiKey).queue.submit(KLING_REFERENCE_ENDPOINT, { input: {
       prompt: promptWithImageReferences(input.prompt, input.referenceImageUrls.length),
       image_urls: input.referenceImageUrls,
       duration: String(input.durationS) as '3' | '4' | '5' | '6' | '7' | '8' | '9' | '10' | '11' | '12' | '13' | '14' | '15',
@@ -129,11 +131,11 @@ export const seedanceReferenceVideoProvider: ReferenceVideoProvider = {
   maxReferenceImages: 30,
   minDurationS: 4,
   maxDurationS: 30,
-  async submit(input) {
+  async submit(input, apiKey) {
     validateReferences(input, this);
     if (!input.endUserId) throw new Error('Seedance 2.5 nécessite l’identifiant de l’utilisateur final.');
     if (!['16:9', '9:16', '1:1', '4:3', '3:4', '21:9'].includes(input.aspectRatio)) throw new Error('Format non pris en charge par Seedance 2.5.');
-    const result = await client().queue.submit(SEEDANCE_REFERENCE_ENDPOINT, { input: {
+    const result = await client(apiKey).queue.submit(SEEDANCE_REFERENCE_ENDPOINT, { input: {
       prompt: promptWithImageReferences(input.prompt, input.referenceImageUrls.length),
       image_urls: input.referenceImageUrls,
       duration: String(input.durationS),

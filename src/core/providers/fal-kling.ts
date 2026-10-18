@@ -3,9 +3,10 @@ import { env } from '@/env';
 import type { ProviderStatus, VideoProvider } from './contracts';
 
 export const KLING_ENDPOINT = 'fal-ai/kling-video/o3/pro/image-to-video';
-function client() {
-  if (!env.FAL_KEY) throw new Error('FAL_KEY manque : configurez la clé fal.ai dans Vercel.');
-  return createFalClient({ credentials: env.FAL_KEY });
+function client(apiKey?: string) {
+  const credentials = apiKey ?? env.FAL_KEY;
+  if (!credentials) throw new Error('Aucune clé Fal n’est configurée.');
+  return createFalClient({ credentials });
 }
 function normalizeStatus(status: string): ProviderStatus {
   switch (status.toUpperCase()) {
@@ -19,8 +20,8 @@ function normalizeStatus(status: string): ProviderStatus {
 
 /** Adapter for the documented Kling O3 Pro image-to-video endpoint. */
 export const klingVideoProvider: VideoProvider = {
-  async submit(input) {
-    const result = await client().queue.submit(KLING_ENDPOINT, { input: {
+  async submit(input, apiKey) {
+    const result = await client(apiKey).queue.submit(KLING_ENDPOINT, { input: {
       prompt: input.prompt,
       image_url: input.imageUrl,
       duration: String(input.durationS) as `${3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15}`,
@@ -28,8 +29,8 @@ export const klingVideoProvider: VideoProvider = {
     } });
     return { requestId: result.request_id };
   },
-  async status(requestId) {
-    const fal = client();
+  async status(requestId, apiKey) {
+    const fal = client(apiKey);
     const result = await fal.queue.status(KLING_ENDPOINT, { requestId, logs: false });
     const status = normalizeStatus(result.status);
     if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération fal.ai a échoué.' } : {}) };

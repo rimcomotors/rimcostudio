@@ -4,9 +4,10 @@ import type { ProviderStatus, VideoProvider } from './contracts';
 
 export const WAN_ENDPOINT = 'alibaba/wan-3.0/image-to-video';
 
-function client() {
-  if (!env.FAL_KEY) throw new Error('FAL_KEY manque : configurez la clé fal.ai dans Vercel.');
-  return createFalClient({ credentials: env.FAL_KEY });
+function client(apiKey?: string) {
+  const credentials = apiKey ?? env.FAL_KEY;
+  if (!credentials) throw new Error('Aucune clé Fal n’est configurée.');
+  return createFalClient({ credentials });
 }
 
 function normalizeStatus(status: string): ProviderStatus {
@@ -21,8 +22,8 @@ function normalizeStatus(status: string): ProviderStatus {
 
 /** Verified Wan 3.0 image-to-video adapter; produces a 5s, silent clip. */
 export const wanVideoProvider: VideoProvider = {
-  async submit(input) {
-    const result = await client().queue.submit(WAN_ENDPOINT, { input: {
+  async submit(input, apiKey) {
+    const result = await client(apiKey).queue.submit(WAN_ENDPOINT, { input: {
       prompt: input.prompt,
       start_image_url: input.imageUrl,
       duration: 5,
@@ -34,8 +35,8 @@ export const wanVideoProvider: VideoProvider = {
     } });
     return { requestId: result.request_id };
   },
-  async status(requestId) {
-    const fal = client();
+  async status(requestId, apiKey) {
+    const fal = client(apiKey);
     const result = await fal.queue.status(WAN_ENDPOINT, { requestId, logs: false });
     const status = normalizeStatus(result.status);
     if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération fal.ai a échoué.' } : {}) };
