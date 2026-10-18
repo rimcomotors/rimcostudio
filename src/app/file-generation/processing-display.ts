@@ -1,10 +1,10 @@
-export type StageDurations = { queueSeconds: number | null; generationSeconds: number | null; transferSeconds: number | null; postproductionSeconds: number | null; billingSeconds: number | null };
+export type StageDurations = { queueSeconds: number | null; keyframingSeconds?: number | null; generationSeconds: number | null; transferSeconds: number | null; postproductionSeconds: number | null; billingSeconds: number | null };
 export type ProcessingDisplayItem = { processingStage?: string | null; processingDurations?: StageDurations };
 
-const steps = ['queued', 'generating', 'transferring', 'postprocessing', 'ready'];
+const steps = ['queued', 'keyframing', 'generating', 'transferring', 'postprocessing', 'ready'];
 const stageRows: Array<[string, keyof StageDurations, number]> = [
-  ['File d’attente', 'queueSeconds', 0], ['Génération', 'generationSeconds', 1], ['Transfert', 'transferSeconds', 2],
-  ['Clôture des coûts', 'billingSeconds', 2], ['Post-production', 'postproductionSeconds', 3],
+  ['File d’attente', 'queueSeconds', 0], ['Images-clés', 'keyframingSeconds', 1], ['Génération', 'generationSeconds', 2], ['Transfert', 'transferSeconds', 3],
+  ['Clôture des coûts', 'billingSeconds', 3], ['Post-production', 'postproductionSeconds', 4],
 ];
 
 export function formatElapsed(seconds: number) {

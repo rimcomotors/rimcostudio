@@ -81,6 +81,27 @@ export async function reserveLlmCost(admin: AdminClient, input: {
   return { data: data?.id ?? null, error: normalizeError(error) };
 }
 
+export async function reserveKeyframeCost(admin: AdminClient, input: {
+  userId: string;
+  versionId: string;
+  department: string;
+  estimatedCostUsd: number;
+  usdToEur: number;
+  eurToFcfa: number;
+}): Promise<ReservationResult> {
+  ensurePositiveFinite(input.estimatedCostUsd, 'estimation de l’image-clé');
+  ensurePositiveFinite(input.usdToEur, 'taux USD/EUR');
+  ensurePositiveFinite(input.eurToFcfa, 'taux EUR/FCFA');
+  const costEur = input.estimatedCostUsd * input.usdToEur;
+  const { data, error } = await admin.from('usage_ledger').insert({
+    version_id: input.versionId, user_id: input.userId, department: input.department,
+    ai_model_id: null, kind: 'keyframe', seconds: 1,
+    cost_usd: input.estimatedCostUsd, cost_eur: costEur, cost_real_fcfa: costEur * input.eurToFcfa,
+    applied_fcfa_per_second: 0, price_fcfa: 0, status: 'reserved',
+  }).select('id').single();
+  return { data: data?.id ?? null, error: normalizeError(error) };
+}
+
 export async function settleUsageCost(admin: AdminClient, input: {
   entryId: string;
   outcome: Outcome;

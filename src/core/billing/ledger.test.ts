@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { reserveGenerationCost, reserveLlmCost, settleUsageCost } from './ledger';
+import { reserveGenerationCost, reserveKeyframeCost, reserveLlmCost, settleUsageCost } from './ledger';
 
 function createAdminMock(options?: { insertedId?: string; ledger?: Record<string, unknown> | null; updateResult?: Record<string, unknown> | null; error?: Error | null }) {
   const inserted: Record<string, unknown>[] = [];
@@ -41,6 +41,19 @@ describe('usage cost ledger', () => {
       ai_model_id: null, kind: 'generation', seconds: 1, cost_usd: 0.5, cost_eur: 0.45,
       applied_fcfa_per_second: 0, price_fcfa: 0, status: 'reserved',
     });
+  });
+
+  it('reserves image-generation cost as an internal non-billable keyframe entry', async () => {
+    const mock = createAdminMock();
+    await reserveKeyframeCost(mock.admin as never, {
+      userId: 'user-1', versionId: 'version-1', department: 'Direction', estimatedCostUsd: 0.08,
+      usdToEur: 0.9, eurToFcfa: 655.957,
+    });
+    expect(mock.inserted[0]).toMatchObject({
+      user_id: 'user-1', version_id: 'version-1', ai_model_id: null, kind: 'keyframe', seconds: 1,
+      cost_usd: 0.08, price_fcfa: 0, status: 'reserved',
+    });
+    expect(Number(mock.inserted[0].cost_eur)).toBeCloseTo(0.072);
   });
 
   it('settles an entry once using an atomic reserved-status update and the 30% markup', async () => {

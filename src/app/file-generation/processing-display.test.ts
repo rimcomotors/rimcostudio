@@ -10,6 +10,13 @@ describe('generation progress display', () => {
     expect(formatStageDurations({
       processingStage: 'generating',
       processingDurations: { queueSeconds: 12, generationSeconds: 65, transferSeconds: null, billingSeconds: null, postproductionSeconds: null },
-    })).toBe('File d’attente : 12 s · Génération : 1 min 5 s · Transfert : À venir · Clôture des coûts : À venir · Post-production : À venir');
+    })).toBe('File d’attente : 12 s · Images-clés : En attente de mesure · Génération : 1 min 5 s · Transfert : À venir · Clôture des coûts : À venir · Post-production : À venir');
+  });
+
+  it('shows keyframing time before animation begins', () => {
+    expect(formatStageDurations({
+      processingStage: 'keyframing',
+      processingDurations: { queueSeconds: 12, keyframingSeconds: 31, generationSeconds: null, transferSeconds: null, billingSeconds: null, postproductionSeconds: null },
+    })).toContain('Images-clés : 31 s');
   });
 });

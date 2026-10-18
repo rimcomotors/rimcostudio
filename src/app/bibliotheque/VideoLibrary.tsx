@@ -6,7 +6,7 @@ import { StatusPill } from '@/components/shell';
 import type { Role } from '@/core/auth/guards';
 import { generationTierLabel } from '@/core/versions/generation-tier';
 
-type Video = { id: string; videoId?: string; title?: string; make?: string; model?: string; status: string; tier?: string | null; photoFidelity?: boolean; format?: string; durationSeconds?: number; createdAt?: string; created_at?: string; estimatedPriceFcfa?: number; price_fcfa?: number; priceFcfa?: number; videoUrl?: string | null; previewUrl?: string | null; previewSource?: 'final' | 'raw' | null; finalUrl?: string; validationId?: string | null; validationStatus?: string | null; version?: number; department?: string; userId?: string; processingStage?: 'queued' | 'generating' | 'transferring' | 'postprocessing' | 'ready' | 'failed'; stageElapsedSeconds?: number | null; processingDurations?: { queueSeconds: number | null; generationSeconds: number | null; transferSeconds: number | null; postproductionSeconds: number | null; billingSeconds: number | null } };
+type Video = { id: string; videoId?: string; title?: string; make?: string; model?: string; status: string; tier?: string | null; photoFidelity?: boolean; format?: string; durationSeconds?: number; createdAt?: string; created_at?: string; estimatedPriceFcfa?: number; price_fcfa?: number; priceFcfa?: number; videoUrl?: string | null; previewUrl?: string | null; previewSource?: 'final' | 'raw' | null; finalUrl?: string; validationId?: string | null; validationStatus?: string | null; version?: number; department?: string; userId?: string; processingStage?: 'queued' | 'keyframing' | 'generating' | 'transferring' | 'postprocessing' | 'ready' | 'failed'; stageElapsedSeconds?: number | null; processingDurations?: { queueSeconds: number | null; keyframingSeconds?: number | null; generationSeconds: number | null; transferSeconds: number | null; postproductionSeconds: number | null; billingSeconds: number | null } };
 
 function formatVideoPrice(video: Video) {
   if (video.photoFidelity) return 'Sans appel vidéo IA';
@@ -24,7 +24,7 @@ function formatVideoDate(value?: string) {
 }
 const isVideoInProgress = (status: string) => ['queued', 'generating', 'postprocessing'].includes(status);
 const videoAspectClass = (format?: string) => format === '9:16' ? 'aspect-[9/16]' : format === '1:1' ? 'aspect-square' : format === '4:5' ? 'aspect-[4/5]' : 'aspect-video';
-const stageLabels: Record<string, string> = { queued: 'En file d’attente', generating: 'Génération vidéo', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation' };
+const stageLabels: Record<string, string> = { queued: 'En file d’attente', keyframing: 'Création des images-clés', generating: 'Génération vidéo', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation' };
 function formatElapsed(seconds?: number | null) {
   if (seconds == null) return '';
   const minutes = Math.floor(seconds / 60);

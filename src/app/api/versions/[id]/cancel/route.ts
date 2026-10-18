@@ -5,6 +5,7 @@ import { allVersions, putVersion } from '@/core/versions/store';
 import { createFalClient } from '@fal-ai/client';
 import { getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
 import { env } from '@/env';
+import { KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT } from '@/core/providers/fal-keyframes';
 
 export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -33,6 +34,20 @@ export async function POST(_request: Request, context: { params: Promise<{ id: s
         // Cancellation may already have completed remotely; never log provider errors or credentials.
         console.warn('Annulation Fal non confirmée.');
       }
+    }
+    const { data: shots } = await admin.from('video_shots').select('provider_request_id,keyframe_request_id,keyframe_quality_request_id').eq('version_id', id);
+    if (shots?.length) {
+      try {
+        const credential = await getFalCredentialById(version.fal_credential_id, admin);
+        const fal = createFalClient({ credentials: credential.apiKey });
+        const cancellations: Array<Promise<void>> = [];
+        for (const shot of shots) {
+          if (shot.keyframe_request_id) cancellations.push(fal.queue.cancel(KEYFRAME_IMAGE_ENDPOINT, { requestId: shot.keyframe_request_id }));
+          if (shot.keyframe_quality_request_id) cancellations.push(fal.queue.cancel(KEYFRAME_VISION_ENDPOINT, { requestId: shot.keyframe_quality_request_id }));
+          if (shot.provider_request_id && model?.fal_endpoint_id) cancellations.push(fal.queue.cancel(model.fal_endpoint_id, { requestId: shot.provider_request_id }));
+        }
+        await Promise.allSettled(cancellations);
+      } catch { console.warn('Annulation Fal des plans non confirmée.'); }
     }
     const { error: versionUpdateError } = await admin.from('video_versions').update({ status: 'cancelled', error_message: 'Annulée par l’utilisateur.', updated_at: now }).eq('id', id).in('status', ['queued', 'generating']);
     if (versionUpdateError) throw versionUpdateError;

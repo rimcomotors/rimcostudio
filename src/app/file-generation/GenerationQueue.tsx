@@ -4,9 +4,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatElapsed, formatStageDurations, type StageDurations } from './processing-display';
 
 type Item = { id: string; title?: string; status: string; versionStatus?: string | null; processingStage?: string; stageElapsedSeconds?: number | null; processingDurations?: StageDurations; durationSeconds?: number; createdAt?: string };
-const steps = ['queued', 'generating', 'transferring', 'postprocessing', 'ready'];
-const labels = ['En file', 'Génération', 'Transfert', 'Habillage', 'Prête'];
-const stageLabels: Record<string, string> = { queued: 'En file d’attente', generating: 'Génération vidéo', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation' };
+const steps = ['queued', 'keyframing', 'generating', 'transferring', 'postprocessing', 'ready'];
+const labels = ['En file', 'Images-clés', 'Génération', 'Transfert', 'Habillage', 'Prête'];
+const stageLabels: Record<string, string> = { queued: 'En file d’attente', keyframing: 'Création des images-clés', generating: 'Génération vidéo', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation' };
 export function GenerationQueue() {
   const [items, setItems] = useState<Item[]>([]);
   const [error, setError] = useState('');

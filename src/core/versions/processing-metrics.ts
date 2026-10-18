@@ -1,5 +1,7 @@
 export type ProcessingMetrics = {
   requestedAt?: string;
+  keyframingStartedAt?: string;
+  keyframingCompletedAt?: string;
   providerSubmittedAt?: string;
   providerQueuedAt?: string;
   generationStartedAt?: string;
@@ -12,7 +14,7 @@ export type ProcessingMetrics = {
   failedAt?: string;
 };
 
-export type ProcessingStage = 'queued' | 'generating' | 'transferring' | 'postprocessing' | 'ready' | 'failed';
+export type ProcessingStage = 'queued' | 'keyframing' | 'generating' | 'transferring' | 'postprocessing' | 'ready' | 'failed';
 
 export function firstObservedAt(metrics: ProcessingMetrics, key: keyof ProcessingMetrics, observedAt: string) {
   return metrics[key] ? metrics : { ...metrics, [key]: observedAt };
@@ -22,6 +24,7 @@ export function processingStage(status: string, metrics: ProcessingMetrics): Pro
   if (status === 'ready') return 'ready';
   if (status === 'failed' || status === 'cancelled') return 'failed';
   if (status === 'postprocessing') return 'postprocessing';
+  if (status === 'generating' && metrics.keyframingStartedAt && !metrics.keyframingCompletedAt) return 'keyframing';
   // Provider completion includes fetching the result and finalizing accounting;
   // keep showing transfer until post-production explicitly starts.
   if (metrics.providerCompletedAt && status === 'generating') return 'transferring';
@@ -42,6 +45,7 @@ export function processingDurations(metrics: ProcessingMetrics, status: string, 
   const terminalAt = status === 'failed' || status === 'cancelled' ? failedAt : undefined;
   return {
     queueSeconds: elapsedSeconds(metrics.providerSubmittedAt, metrics.generationStartedAt ?? terminalAt, now),
+    keyframingSeconds: elapsedSeconds(metrics.keyframingStartedAt, metrics.keyframingCompletedAt ?? terminalAt, now),
     generationSeconds: elapsedSeconds(metrics.generationStartedAt, metrics.providerCompletedAt ?? terminalAt, now),
     transferSeconds: elapsedSeconds(metrics.providerCompletedAt, metrics.rawStoredAt ?? terminalAt, now),
     postproductionSeconds: elapsedSeconds(metrics.postproductionStartedAt, metrics.postproductionCompletedAt ?? terminalAt, now),
