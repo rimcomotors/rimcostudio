@@ -90,7 +90,8 @@ export async function POST(request: Request) {
       const total = input.durationSeconds;
       const durations = input.workflow === 'single'
         ? [total]
-        : total === 10 ? [5, 5] : total === 15 ? [8, 7] : [10, 10];
+        : input.mode === 'standard' ? Array.from({ length: total / 5 }, () => 5)
+          : total === 10 ? [5, 5] : total === 15 ? [8, 7] : [10, 10];
       const drafts = durations.map((durationSeconds, index) => ({
         title: index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
         scene: index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',

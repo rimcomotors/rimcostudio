@@ -16,7 +16,7 @@ describe('storyboard', () => {
 
   it('requires generated clips to fill the selected runtime before adding the logo card', () => {
     expect(validateStoryboard([{ ...shots[0], durationSeconds: 5 }, { ...shots[1], durationSeconds: 5 }], 10, 'seedance')).toBe(true);
-    expect(validateStoryboard(shots, 15, 'wan')).toBe(true);
+    expect(validateStoryboard([{ ...shots[0], durationSeconds: 5 }, { ...shots[1], durationSeconds: 5 }, { ...shots[0], durationSeconds: 5 }], 15, 'wan')).toBe(true);
     expect(() => validateStoryboard(shots, 20, 'wan')).toThrow(/durée/i);
     expect(() => validateStoryboard([{ ...shots[0], durationSeconds: 11 }, { ...shots[1], durationSeconds: 9 }], 20, 'wan')).toThrow(/maximum/i);
     expect(validateStoryboard([{ ...shots[0], durationSeconds: 12 }, { ...shots[1], durationSeconds: 8 }], 20, 'kling')).toBe(true);
@@ -81,11 +81,14 @@ describe('storyboard', () => {
   });
 
   it('splits long endpoint-bound shots and appends two logo seconds to the final runtime', () => {
-    expect(getSingleShotClipDurations(20, 'wan')).toEqual([10, 10]);
+    expect(getSingleShotClipDurations(5, 'wan')).toEqual([5]);
+    expect(getSingleShotClipDurations(10, 'wan')).toEqual([5, 5]);
+    expect(getSingleShotClipDurations(15, 'wan')).toEqual([5, 5, 5]);
+    expect(getSingleShotClipDurations(20, 'wan')).toEqual([5, 5, 5, 5]);
     expect(getSingleShotClipDurations(20, 'kling')).toEqual([10, 10]);
     expect(getSingleShotClipDurations(20, 'seedance')).toEqual([20]);
     expect(finalVideoSeconds(20)).toBe(22);
     expect(finalVideoSeconds(5)).toBe(7);
-    expect(expandSingleShotStoryboard(shots[0], 20, 'wan').map((shot) => shot.durationSeconds)).toEqual([10, 10]);
+    expect(expandSingleShotStoryboard(shots[0], 20, 'wan').map((shot) => shot.durationSeconds)).toEqual([5, 5, 5, 5]);
   });
 });

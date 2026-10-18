@@ -775,3 +775,11 @@ update public.ai_models set tier='premium',adapter_family='seedance',mode='image
   allowed_formats='{16:9,9:16,1:1}',pricing_verified_at=now()
 where fal_endpoint_id='bytedance/seedance-2.5/image-to-video';
 notify pgrst, 'reload schema';
+
+-- 0025_standard_keyframe_animation.sql
+update public.ai_models set
+  tier='standard', adapter_family='wan', mode='image_to_video',
+  is_active=true, price_usd_per_second=0.10, allowed_durations='{5}',
+  allowed_formats='{16:9,9:16,1:1}', pricing_verified_at=now()
+where fal_endpoint_id='alibaba/wan-3.0/image-to-video';
+notify pgrst, 'reload schema';

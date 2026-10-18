@@ -1,11 +1,11 @@
-import { REFERENCE_MODEL_ENDPOINTS } from './model-routing';
+import { MODEL_ENDPOINTS, REFERENCE_MODEL_ENDPOINTS } from './model-routing';
 
 /** New multi-clip storyboard modes; intentionally separate from legacy tiers. */
 export type StoryboardMode = 'standard' | 'pro' | 'premium';
 export type StoryboardClipDuration = 5 | 10 | 15 | 20;
 
 export const STORYBOARD_MODE_ROUTES = {
-  standard: { label: 'Standard', adapterFamily: 'wan', endpoint: REFERENCE_MODEL_ENDPOINTS.standard, minClipDurationS: 2, maxClipDurationS: 10, maxReferenceImages: 20 },
+  standard: { label: 'Standard', adapterFamily: 'wan', endpoint: MODEL_ENDPOINTS.wan, minClipDurationS: 5, maxClipDurationS: 5, maxReferenceImages: 20 },
   pro: { label: 'Pro', adapterFamily: 'kling', endpoint: REFERENCE_MODEL_ENDPOINTS.pro, minClipDurationS: 3, maxClipDurationS: 15, maxReferenceImages: 4 },
   premium: { label: 'Premium', adapterFamily: 'seedance', endpoint: REFERENCE_MODEL_ENDPOINTS.premium, minClipDurationS: 4, maxClipDurationS: 30, maxReferenceImages: 30 },
 } as const;

@@ -54,7 +54,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const route = getStoryboardModeRoute(input.storyMode);
   const provider = providers[route.adapterFamily];
   const keyframeMode = shouldGenerateKeyframes(input.storyMode);
-  const animationEndpoint = input.storyMode === 'pro' ? KEYFRAME_VIDEO_ENDPOINTS.kling : input.storyMode === 'premium' ? KEYFRAME_VIDEO_ENDPOINTS.seedance : null;
+  const animationEndpoint = KEYFRAME_VIDEO_ENDPOINTS[route.adapterFamily];
   const isSingleShot = input.workflow === 'single';
   if (isSingleShot) validateSingleShotStoryboard(input.storyboard, input.clipDurationSeconds, route.adapterFamily);
   else {
@@ -67,7 +67,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const [{ data: dossiers, error: dossierError }, { data: model, error: modelError }, { data: animationModel, error: animationModelError }] = await Promise.all([
     authenticated.from('vehicle_dossiers').select('id,make,model,color,variant,brand_id,assets(id,kind,path,title,angle,photo_role,status)').in('id', dossierIds).eq('brand_id', actor.brandId),
     admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,price_usd_per_second,pricing_verified_at,allowed_formats,allowed_durations,is_active').eq('fal_endpoint_id', route.endpoint).eq('is_active', true).single(),
-    keyframeMode && animationEndpoint ? admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,price_usd_per_second,pricing_verified_at,allowed_formats,allowed_durations,is_active').eq('fal_endpoint_id', animationEndpoint).eq('is_active', true).single() : Promise.resolve({ data: null, error: null }),
+    keyframeMode ? admin.from('ai_models').select('id,name,tier,fal_endpoint_id,adapter_family,price_usd_per_second,pricing_verified_at,allowed_formats,allowed_durations,is_active').eq('fal_endpoint_id', animationEndpoint).eq('is_active', true).single() : Promise.resolve({ data: null, error: null }),
   ]);
   const dossier = dossiers?.find((entry) => entry.id === input.vehicleDossierId);
   if (dossierError || !dossiers || !dossier || dossiers.length !== dossierIds.length) throw new HttpError(422, 'Choisissez des dossiers véhicule de votre marque.');
@@ -335,7 +335,7 @@ async function refreshKeyframes(input: {
   actor: Actor;
   brief: Record<string, unknown>;
   apiKey: string;
-  adapterFamily: 'kling' | 'seedance';
+  adapterFamily: 'wan' | 'kling' | 'seedance';
 }) {
   const { admin, version, video, shots, brief, apiKey, adapterFamily } = input;
   const shotDrafts = Array.isArray(brief.storyboard) ? brief.storyboard as StoryboardShot[] : [];
@@ -537,10 +537,10 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const keyframeMode = briefData.keyframeMode === true;
   const falCredential = await getFalCredentialById(version.fal_credential_id, admin);
   if (keyframeMode) {
-    const keyframeResult = await refreshKeyframes({ admin, version, video, shots, actor, brief: briefData, apiKey: falCredential.apiKey, adapterFamily: adapterFamily === 'seedance' ? 'seedance' : 'kling' });
+    const keyframeResult = await refreshKeyframes({ admin, version, video, shots, actor, brief: briefData, apiKey: falCredential.apiKey, adapterFamily });
     if (keyframeResult) return keyframeResult;
   }
-  const statusProvider = keyframeMode ? keyframeVideoProviders[adapterFamily === 'seedance' ? 'seedance' : 'kling'] : multiClip || singleStoryboardMode ? providers[adapterFamily] : klingVideoProvider;
+  const statusProvider = keyframeMode ? keyframeVideoProviders[adapterFamily] : multiClip || singleStoryboardMode ? providers[adapterFamily] : klingVideoProvider;
 
   const shotRefreshResults = await Promise.allSettled(shots.filter((shot) => shot.status === 'generating' && shot.provider_request_id).map(async (shot) => {
     let state;

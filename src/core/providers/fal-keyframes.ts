@@ -3,16 +3,18 @@ import { z } from 'zod';
 import { env } from '@/env';
 import type { StoryboardShot, StoryMode } from '@/core/storyboard';
 import type { ReferenceVideoProvider } from './fal-reference-video';
+import { MODEL_ENDPOINTS } from './model-routing';
 
 export const KEYFRAME_IMAGE_ENDPOINT = 'fal-ai/nano-banana-2/edit';
 export const KEYFRAME_VISION_ENDPOINT = 'openrouter/router/vision';
 export const KEYFRAME_IMAGE_COST_USD = 0.08;
 export const KEYFRAME_QUALITY_RESERVE_USD = 0.05;
 export const KEYFRAME_VIDEO_ENDPOINTS = {
-  kling: 'fal-ai/kling-video/o3/pro/image-to-video',
-  seedance: 'bytedance/seedance-2.5/image-to-video',
+  wan: MODEL_ENDPOINTS.wan,
+  kling: MODEL_ENDPOINTS.kling,
+  seedance: MODEL_ENDPOINTS.seedance,
 } as const;
-export const KEYFRAME_VIDEO_PRICES_USD_PER_SECOND = { kling: 0.112, seedance: 0.473 } as const;
+export const KEYFRAME_VIDEO_PRICES_USD_PER_SECOND = { wan720p: 0.10, kling: 0.112, seedance: 0.473 } as const;
 export type KeyframeQuality = { approved: boolean; issues: string[]; reason: string };
 
 const qualitySchema = z.object({
@@ -22,7 +24,7 @@ const qualitySchema = z.object({
 }).strict();
 
 export function shouldGenerateKeyframes(mode: StoryMode) {
-  return mode === 'pro' || mode === 'premium';
+  return mode === 'standard' || mode === 'pro' || mode === 'premium';
 }
 
 export function keyframeQualityAction(approved: boolean, retryCount: number): 'accept' | 'retry' | 'reject' {
@@ -108,19 +110,23 @@ export async function readKeyframeQuality(requestId: string, apiKey: string) {
   return { status: quality ? 'ready' as const : 'failed' as const, costUsd, quality };
 }
 
-function createKeyframeVideoProvider(family: 'kling' | 'seedance'): ReferenceVideoProvider {
+function createKeyframeVideoProvider(family: 'wan' | 'kling' | 'seedance'): ReferenceVideoProvider {
   const endpoint = KEYFRAME_VIDEO_ENDPOINTS[family];
   return {
     endpoint,
     maxReferenceImages: 1,
-    minDurationS: family === 'kling' ? 3 : 4,
-    maxDurationS: family === 'kling' ? 15 : 30,
+    minDurationS: family === 'wan' ? 5 : family === 'kling' ? 3 : 4,
+    maxDurationS: family === 'wan' ? 5 : family === 'kling' ? 15 : 30,
     async submit(input, apiKey) {
       const imageUrl = input.referenceImageUrls[0];
       if (!imageUrl) throw new Error('L’image-clé de départ est introuvable.');
-      const modelInput = family === 'kling'
-        ? { prompt: input.prompt, start_image_url: imageUrl, duration: String(input.durationS), generate_audio: false, enable_safety_checker: true }
-        : { prompt: input.prompt, image_url: imageUrl, duration: String(input.durationS), resolution: '720p', aspect_ratio: 'auto', generate_audio: false };
+      if (family === 'wan' && input.durationS !== 5) throw new Error('Wan 3.0 exige des segments de 5 secondes.');
+      if (family === 'wan' && !['16:9', '9:16', '1:1'].includes(input.aspectRatio)) throw new Error('Format vidéo non pris en charge par Wan 3.0.');
+      const modelInput = family === 'wan'
+        ? { prompt: input.prompt, start_image_url: imageUrl, duration: 5, aspect_ratio: input.aspectRatio, resolution: '720p', audio: false, enable_prompt_expansion: false, enable_safety_checker: true }
+        : family === 'kling'
+          ? { prompt: input.prompt, start_image_url: imageUrl, duration: String(input.durationS), generate_audio: false, enable_safety_checker: true }
+          : { prompt: input.prompt, image_url: imageUrl, duration: String(input.durationS), resolution: '720p', aspect_ratio: 'auto', generate_audio: false };
       const result = await fal(apiKey ?? '').queue.submit(endpoint, { input: modelInput });
       return { requestId: result.request_id };
     },
@@ -138,6 +144,7 @@ function createKeyframeVideoProvider(family: 'kling' | 'seedance'): ReferenceVid
 }
 
 export const keyframeVideoProviders = {
+  wan: createKeyframeVideoProvider('wan'),
   kling: createKeyframeVideoProvider('kling'),
   seedance: createKeyframeVideoProvider('seedance'),
-} satisfies Record<'kling' | 'seedance', ReferenceVideoProvider>;
+} satisfies Record<'wan' | 'kling' | 'seedance', ReferenceVideoProvider>;

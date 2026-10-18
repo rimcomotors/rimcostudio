@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildKeyframeAnimationPrompt, buildKeyframePrompt, canAnimateKeyframes, keyframeQualityAction, parseKeyframeQuality, shouldGenerateKeyframes } from './fal-keyframes';
 
+const { mockSubmit, mockStatus, mockResult } = vi.hoisted(() => ({ mockSubmit: vi.fn(), mockStatus: vi.fn(), mockResult: vi.fn() }));
+vi.mock('@fal-ai/client', () => ({ createFalClient: vi.fn(() => ({ queue: { submit: mockSubmit, status: mockStatus, result: mockResult } })) }));
+
 describe('fal keyframe helpers', () => {
+  beforeEach(() => { vi.resetModules(); vi.stubEnv('FAL_KEY', 'test-fal-key'); mockSubmit.mockReset(); mockStatus.mockReset(); mockResult.mockReset(); });
   it('creates a still-image direction from the approved shot without asking for motion', () => {
     const prompt = buildKeyframePrompt({
       shot: { title: 'Départ en famille', scene: 'Boulevard lagunaire', framing: 'Plan large', location: 'Abidjan', action: 'La famille prend place', camera: 'Contre-plongée discrète', durationSeconds: 5, vehiclePhotoId: 'vehicle-1', locationPhotoId: 'place-1' },
@@ -31,8 +35,8 @@ describe('fal keyframe helpers', () => {
     expect(prompt).toContain('no cuts');
   });
 
-  it('limits automatic keyframes to Pro and Premium', () => {
-    expect(shouldGenerateKeyframes('standard')).toBe(false);
+  it('creates automatic keyframes for all tiers', () => {
+    expect(shouldGenerateKeyframes('standard')).toBe(true);
     expect(shouldGenerateKeyframes('pro')).toBe(true);
     expect(shouldGenerateKeyframes('premium')).toBe(true);
   });
@@ -44,5 +48,26 @@ describe('fal keyframe helpers', () => {
     expect(canAnimateKeyframes(['ready', 'checking'])).toBe(false);
     expect(canAnimateKeyframes(['ready', 'ready'])).toBe(true);
     expect(canAnimateKeyframes([])).toBe(false);
+  });
+
+  it('animates Standard keyframes through Wan 3.0 using the accepted image as its first frame', async () => {
+    mockSubmit.mockResolvedValue({ request_id: 'wan-keyframe-video' });
+    const { keyframeVideoProviders, KEYFRAME_VIDEO_ENDPOINTS } = await import('./fal-keyframes');
+    await keyframeVideoProviders.wan.submit({
+      prompt: 'Slow cinematic vehicle movement', referenceImageUrls: ['https://assets.example/keyframe.png'],
+      durationS: 5, aspectRatio: '9:16',
+    }, 'test-fal-key');
+    expect(mockSubmit).toHaveBeenCalledWith(KEYFRAME_VIDEO_ENDPOINTS.wan, { input: {
+      prompt: 'Slow cinematic vehicle movement', start_image_url: 'https://assets.example/keyframe.png', duration: 5,
+      aspect_ratio: '9:16', resolution: '720p', audio: false, enable_prompt_expansion: false, enable_safety_checker: true,
+    } });
+  });
+
+  it('rejects Wan keyframe formats and durations outside its verified capabilities before charging', async () => {
+    const { keyframeVideoProviders } = await import('./fal-keyframes');
+    const input = { prompt: 'Motion', referenceImageUrls: ['https://assets.example/keyframe.png'], durationS: 5, aspectRatio: '4:5' };
+    await expect(keyframeVideoProviders.wan.submit(input, 'test-fal-key')).rejects.toThrow('Format vidéo non pris en charge');
+    await expect(keyframeVideoProviders.wan.submit({ ...input, aspectRatio: '16:9', durationS: 10 }, 'test-fal-key')).rejects.toThrow('exige des segments de 5 secondes');
+    expect(mockSubmit).not.toHaveBeenCalled();
   });
 });
