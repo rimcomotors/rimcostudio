@@ -6,12 +6,13 @@ import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
 import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, getSingleShotClipDurations, singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
-import { createFalLlmProvider, FalLlmBriefError } from '@/core/providers/fal-llm';
+import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { getActiveFalCredential } from '@/core/providers/fal-credential-vault';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
 import { findCuratedLocation } from '@/core/assets/location-catalog';
 import { calculateClientPriceFcfa } from '@/core/pricing';
+import { storyboardDirectionSchema } from '@/core/storyboard-direction';
 
 const requestSchema = z.object({
   workflow: z.enum(['single', 'multi_clip']).default('multi_clip'),
@@ -22,11 +23,11 @@ const requestSchema = z.object({
   mode: z.enum(['standard', 'pro', 'premium']),
   durationSeconds: z.union([z.literal(5), z.literal(10), z.literal(15), z.literal(20)]),
   purpose: z.enum(['presentation', 'advertising']),
-  direction: z.string().trim().max(500).default(''),
+  direction: storyboardDirectionSchema.default(''),
   format: z.enum(['16:9', '9:16', '1:1', '4:5']).default('16:9'),
   character: z.string().trim().max(160).default(''),
   lighting: z.string().trim().max(160).default(''),
-}).strict();
+});
 const storyboardResponseSchema = z.object({ shots: storyboardSchema }).strict();
 const singleShotStoryboardResponseSchema = z.object({ shots: singleShotStoryboardSchema }).strict();
 
@@ -36,7 +37,20 @@ export async function POST(request: Request) {
   try {
     const actor = await getActor();
     if (!actor.brandId) throw new HttpError(403, 'Aucune marque n’est associée à votre profil.');
-    const input = requestSchema.parse(await request.json());
+    const parsedInput = requestSchema.safeParse(await request.json());
+    if (!parsedInput.success) {
+      console.warn(`[storyboard-suggest:${referenceId}] Requête refusée par validation.`, {
+        issues: parsedInput.error.issues.map(({ path, code }) => ({ path, code })),
+      });
+      const directionTooLong = parsedInput.error.issues.some((issue) => issue.path[0] === 'direction' && issue.code === 'too_big');
+      return NextResponse.json({
+        error: directionTooLong
+          ? 'Votre description est trop longue. Raccourcissez-la puis réessayez.'
+          : 'Certaines options du Studio ne sont pas valides. Vérifiez votre sélection puis réessayez.',
+        referenceId,
+      }, { status: 422 });
+    }
+    const input = parsedInput.data;
     if (input.workflow === 'multi_clip' && input.durationSeconds < 10) throw new HttpError(422, 'Le workflow multi-plans demande au moins 10 secondes de clips.');
     const supabase = await createSupabaseServerClient();
     const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
@@ -119,9 +133,7 @@ export async function POST(request: Request) {
       try {
         const provider = createFalLlmProvider(async (prompt, system) => {
           const fal = createFalClient({ credentials: falCredential.apiKey });
-          return fal.subscribe('openrouter/router', { input: {
-            prompt, system_prompt: system, model: env.LLM_MODEL!, temperature: 0.2, max_tokens: 2400,
-          } as never });
+          return fal.subscribe('openrouter/router', { input: buildFalLlmInput(prompt, system, env.LLM_MODEL!) as never });
         });
         const responseSchema = input.workflow === 'single' ? singleShotStoryboardResponseSchema : storyboardResponseSchema;
         const result = await provider.buildStoryboardWithCost(instruction, responseSchema, 'You are an expert automotive commercial director. Return only JSON matching the requested schema. Use French for all creative text.');
@@ -163,7 +175,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ storyboard: shots, prompt: instruction, mode: input.mode, durationSeconds: input.durationSeconds, finalVideoSeconds: input.durationSeconds + 2, storyboardLedgerId, storyboardCostUsd, storyboardCostFcfa: Math.round(storyboardCostUsd * env.USD_TO_EUR_RATE * env.EUR_TO_FCFA * 1.3), totalEstimatedPriceFcfa });
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error);
-    if (error instanceof z.ZodError) return NextResponse.json({ error: 'Certains choix ont changé. Vérifiez les options du Studio puis réessayez.' }, { status: 422 });
+    if (error instanceof z.ZodError) {
+      console.error(`[storyboard-suggest:${referenceId}] Validation interne du storyboard échouée.`, {
+        issues: error.issues.map(({ path, code }) => ({ path, code })),
+      });
+      return NextResponse.json({ error: 'Le réalisateur a préparé des plans incompatibles avec le format demandé. Réessayez avec une description plus simple.', referenceId }, { status: 422 });
+    }
     const providerCause = error instanceof FalLlmBriefError ? error.providerCause : undefined;
     const detail = (cause: unknown) => {
       const message = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause ?? 'Erreur inconnue');

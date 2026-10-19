@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { formatFcfa } from '@/core/pricing';
 import { getScenePresets, getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
+import { MAX_STORYBOARD_DIRECTION_LENGTH } from '@/core/storyboard-direction';
 
 type Format = '16:9' | '9:16' | '1:1';
 type Job = { id: string; status: string; error?: string; prompt?: string; completedShots?: number; totalShots?: number; completedKeyframes?: number; totalKeyframes?: number; keyframes?: Array<{ number: number; title: string; url: string }>; estimatedPriceFcfa?: number; processingStage?: string; stageElapsedSeconds?: number | null };
@@ -210,7 +211,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
             {additionalDirection.trim() && <p className="mt-6 max-w-2xl whitespace-pre-wrap text-sm leading-6 text-[#4d4a45]">{additionalDirection.trim()}</p>}
           </div>
           <div className="border-t border-[#eeeae4] p-4 md:p-5">
-            <textarea value={additionalDirection} onChange={(event) => { setAdditionalDirection(event.target.value); clearFormError(); }} maxLength={240} rows={3} placeholder="Décrivez votre vidéo…" aria-label="Description de la vidéo" className="w-full resize-y rounded-md border border-[#e9e7e2] bg-[#fcfcfb] p-3 text-sm leading-6 outline-none focus:border-[#c51e1c]" />
+            <textarea value={additionalDirection} onChange={(event) => { setAdditionalDirection(event.target.value); clearFormError(); }} maxLength={MAX_STORYBOARD_DIRECTION_LENGTH} rows={3} placeholder="Décrivez votre vidéo…" aria-label="Description de la vidéo" className="w-full resize-y rounded-md border border-[#e9e7e2] bg-[#fcfcfb] p-3 text-sm leading-6 outline-none focus:border-[#c51e1c]" />
             <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
               <button type="button" onClick={() => { setAdditionalDirection('Une vidéo publicitaire automobile élégante, avec une mise en valeur progressive du véhicule.'); clearFormError(); }} className="text-xs font-semibold text-[#c51e1c] underline underline-offset-4">Insérer un exemple</button>
               <button type="button" onClick={() => document.getElementById('generation-options')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="rounded-md bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-[#a71715]">Envoyer la description ↑</button>

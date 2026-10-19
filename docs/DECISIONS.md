@@ -1,5 +1,10 @@
 # Décisions
 
+## Corrections après le test vidéo de 10 secondes (2026-10-19)
+
+- Le brief d’essai de 576 caractères était refusé par la limite API de 500 caractères et l’interface limitait la saisie à 240. Les deux utilisent maintenant une limite partagée de 1 000 caractères. Les erreurs de validation distinguent une description trop longue d’options invalides; les champs client inconnus sont ignorés pour rester tolérant aux versions d’interface en cache.
+- Le premier essai avec un brief court a atteint fal, puis `openrouter/router` a répondu `Bad Request`. La route storyboard construisait son payload directement et omettait `reasoning: true`, alors que le modèle Claude Sonnet 5.5 configuré dans Vercel le requiert selon le réglage du projet. La route réutilise maintenant `buildFalLlmInput`, qui inclut ce paramètre et est couvert par un test. À confirmer par une génération réelle après déploiement.
+
 ## Remplacement sécurisé du compte Fal (2026-10-18)
 
 - L’admin peut remplacer la clé Fal depuis Administration → Connexion Fal. La clé est chiffrée avec AES-256-GCM avant stockage dans `fal_provider_credentials`; seul le rôle `service_role` peut lire cette table. Les réponses API ne renvoient que l’état configuré, la source et la date de mise à jour.
