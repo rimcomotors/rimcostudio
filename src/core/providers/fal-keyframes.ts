@@ -90,7 +90,7 @@ export async function submitKeyframeQuality(input: { prompt: string; imageUrls: 
   if (!env.LLM_MODEL) throw new Error('Le modèle de vision n’est pas configuré.');
   const result = await fal(apiKey).queue.submit(KEYFRAME_VISION_ENDPOINT, { input: {
     prompt: input.prompt, system_prompt: 'Tu contrôles les images-clés de publicités automobiles. Réponds uniquement en JSON strict avec approved (booléen), issues (tableau de problèmes visibles) et reason (phrase courte). Sois strict sur le véhicule, sa couleur, le lieu et le texte ajouté. Ne prétends pas identifier des détails invisibles.',
-    model: env.LLM_MODEL, image_urls: input.imageUrls, temperature: 0.1, max_tokens: 300,
+    model: env.LLM_MODEL, image_urls: input.imageUrls, reasoning: true, temperature: 0.1, max_tokens: 300,
   } });
   return { requestId: result.request_id };
 }
