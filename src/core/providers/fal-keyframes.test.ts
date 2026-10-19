@@ -41,6 +41,18 @@ describe('fal keyframe helpers', () => {
     });
   });
 
+  it('uses a valid structured decision in reasoning only when the final output is empty or truncated', () => {
+    const decision = '{"approved":true,"issues":[],"reason":"Conforme"}';
+    expect(extractFalVisionResult({ data: { output: '', reasoning: decision } }).output).toBe(decision);
+    expect(extractFalVisionResult({ data: { output: '{"approved":true,"issues":[],"reason":"Tronqué', reasoning: decision } }).output).toBe(decision);
+    expect(extractFalVisionResult({ data: { output: '', reasoning: 'Un raisonnement sans décision structurée.' } }).output).toBe('');
+  });
+
+  it('serializes a structured object returned directly by a compatible vision provider', () => {
+    expect(extractFalVisionResult({ data: { output: { approved: true, issues: [], reason: 'Conforme' } } }).output)
+      .toBe('{"approved":true,"issues":[],"reason":"Conforme"}');
+  });
+
   it('ignores unexpected quality metadata while requiring the complete decision fields', () => {
     expect(parseKeyframeQuality('{"approved":true,"issues":[],"reason":"Conforme","confidence":0.98}')).toEqual({
       approved: true, issues: [], reason: 'Conforme',
@@ -58,8 +70,8 @@ describe('fal keyframe helpers', () => {
     expect(mockSubmit).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { input: expect.objectContaining({
       model: 'anthropic/claude-sonnet-5.5',
       reasoning: true,
-      max_tokens: 500,
-      system_prompt: expect.stringContaining('un seul objet JSON valide'),
+      max_tokens: 1500,
+      system_prompt: expect.stringContaining('objet JSON compact'),
       image_urls: ['https://assets.example/keyframe.png'],
     }) });
   });
