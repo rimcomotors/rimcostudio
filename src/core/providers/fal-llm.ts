@@ -25,14 +25,7 @@ type FalSubscribe = (endpoint: string, options: { input: Record<string, string |
 export type LlmCall = (prompt: string, systemPrompt: string) => Promise<unknown>;
 
 export function buildFalLlmInput(prompt: string, systemPrompt: string, model: string) {
-  return {
-    prompt,
-    system_prompt: systemPrompt,
-    model,
-    reasoning: true,
-    temperature: 0.2,
-    max_tokens: 4000,
-  } as const;
+  return { prompt, system_prompt: systemPrompt, model, reasoning: true, temperature: 0.2, max_tokens: 4000 } as const;
 }
 
 function outputText(result: unknown): string {
@@ -48,7 +41,39 @@ function outputText(result: unknown): string {
 
 function parseJson(text: string): unknown {
   const normalized = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  return JSON.parse(normalized) as unknown;
+  try {
+    return JSON.parse(normalized) as unknown;
+  } catch (initialError) {
+    for (let start = normalized.indexOf('{'); start >= 0; start = normalized.indexOf('{', start + 1)) {
+      const candidate = findCompleteJsonObject(normalized, start);
+      if (!candidate) continue;
+      try { return JSON.parse(candidate) as unknown; }
+      catch { /* Skip prose examples and try the next complete object. */ }
+    }
+    throw initialError;
+  }
+}
+
+function findCompleteJsonObject(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === '{') depth += 1;
+    else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+  return null;
 }
 
 function incompleteResponseIssue(response: unknown): string | null {
@@ -66,31 +91,20 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
   let hasReportedCost = false;
   let completedRequests = 0;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire : renvoie un seul objet JSON complet, sans raisonnement, commentaire ni balisage Markdown. Respecte exactement le schéma demandé.`;
+    const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire : la réponse précédente était incomplète ou invalide. Retourne un JSON compact et complet, sans raisonnement (no reasoning), commentaire, préambule ni Markdown. Garde les valeurs textuelles très courtes, respecte strictement le schéma et ses limites, conserve les identifiants fournis à l’identique, et ferme toutes les chaînes et accolades.`;
     let response: unknown;
-    try {
-      response = await call(request, instructions);
-    } catch (providerCause) {
-      throw new FalLlmBriefError('L’appel au fournisseur LLM a échoué.', completedRequests, hasReportedCost ? costUsd : null, providerCause);
-    }
+    try { response = await call(request, instructions); }
+    catch (providerCause) { throw new FalLlmBriefError('L’appel au fournisseur LLM a échoué.', completedRequests, hasReportedCost ? costUsd : null, providerCause); }
     completedRequests += 1;
     const reportedCost = responseCost(response);
-    if (reportedCost !== null) {
-      costUsd += reportedCost;
-      hasReportedCost = true;
-    }
+    if (reportedCost !== null) { costUsd += reportedCost; hasReportedCost = true; }
     const incompleteIssue = incompleteResponseIssue(response);
-    if (incompleteIssue) {
-      lastIssue = incompleteIssue;
-      continue;
-    }
+    if (incompleteIssue) { lastIssue = incompleteIssue; continue; }
     try {
       const fieldsResult = schema.safeParse(parseJson(outputText(response)));
       if (fieldsResult.success) return { fields: fieldsResult.data, costUsd: hasReportedCost ? costUsd : null };
       lastIssue = fieldsResult.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
-    } catch (error) {
-      lastIssue = error instanceof Error ? error.message : 'Réponse invalide.';
-    }
+    } catch (error) { lastIssue = error instanceof Error ? error.message : 'Réponse invalide.'; }
   }
   throw new FalLlmBriefError(`Impossible de construire un brief vidéo valide après une nouvelle tentative : ${lastIssue}`, completedRequests, hasReportedCost ? costUsd : null);
 }
@@ -104,18 +118,14 @@ function responseCost(response: unknown): number | null {
 
 export function createFalLlmProvider(call: LlmCall) {
   return {
-    async buildBrief(description: string, options: Record<string, string>) {
-      return (await this.buildBriefWithCost(description, options)).brief;
-    },
+    async buildBrief(description: string, options: Record<string, string>) { return (await this.buildBriefWithCost(description, options)).brief; },
     async buildBriefWithCost(description: string, options: Record<string, string>) {
       const prompt = `À partir de cette demande utilisateur, construis le brief vidéo RIMCO. Garde la demande fidèle et concise. Les options déjà choisies doivent être respectées: ${JSON.stringify(options)}. La creative_direction doit bien les synthétiser sans ajouter de détails contradictoires.\nDemande complémentaire: ${description || 'Aucune; compose uniquement à partir des options choisies.'}`;
       const generated = await validatedFields(call, prompt, generatedBriefFieldsSchema);
       const selectedOptions = Object.fromEntries(Object.entries(options).filter(([key, value]) => key === 'vehicle_asset_id' || key === 'vehicle_description' || value.trim().length > 0));
       return { brief: briefSchema.parse({ vehicle_asset_id: options.vehicle_asset_id || 'mock-vehicle', vehicle_description: options.vehicle_description || description, ...generated.fields, ...selectedOptions, duration_s: Number(options.duration_s ?? 5) }), costUsd: generated.costUsd };
     },
-    async buildStoryboardWithCost<T>(prompt: string, schema: z.ZodType<T>, instructions: string): Promise<{ fields: T; costUsd: number | null }> {
-      return validatedFields(call, prompt, schema, instructions);
-    },
+    async buildStoryboardWithCost<T>(prompt: string, schema: z.ZodType<T>, instructions: string): Promise<{ fields: T; costUsd: number | null }> { return validatedFields(call, prompt, schema, instructions); },
   } satisfies LlmProvider & {
     buildBriefWithCost(description: string, options: Record<string, string>): Promise<{ brief: Brief; costUsd: number | null }>;
     buildStoryboardWithCost<T>(prompt: string, schema: z.ZodType<T>, instructions: string): Promise<{ fields: T; costUsd: number | null }>;
@@ -125,9 +135,7 @@ export function createFalLlmProvider(call: LlmCall) {
 function falCall(apiKey = env.FAL_KEY ?? ''): LlmCall {
   const fal = createFalClient({ credentials: apiKey });
   const subscribe = fal.subscribe as unknown as FalSubscribe;
-  return async (prompt, system_prompt) => subscribe(FAL_LLM_ENDPOINT, {
-    input: buildFalLlmInput(prompt, system_prompt, env.LLM_MODEL ?? ''),
-  });
+  return async (prompt, system_prompt) => subscribe(FAL_LLM_ENDPOINT, { input: buildFalLlmInput(prompt, system_prompt, env.LLM_MODEL ?? '') });
 }
 
 export const falLlmProvider: LlmProvider = {
