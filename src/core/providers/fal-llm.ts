@@ -29,9 +29,7 @@ export function buildFalLlmInput(prompt: string, systemPrompt: string, model: st
     prompt,
     system_prompt: systemPrompt,
     model,
-    // The endpoint can append reasoning to the final text when this is enabled,
-    // which makes a JSON-only response fragile and consumes the output budget.
-    reasoning: false,
+    reasoning: true,
     temperature: 0.2,
     max_tokens: 4000,
   } as const;
@@ -68,7 +66,7 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
   let hasReportedCost = false;
   let completedRequests = 0;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-      const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire : renvoie un seul objet JSON complet, sans raisonnement, commentaire ni balisage Markdown. Respecte exactement le schéma demandé.`;
+    const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire : renvoie un seul objet JSON complet, sans raisonnement, commentaire ni balisage Markdown. Respecte exactement le schéma demandé.`;
     let response: unknown;
     try {
       response = await call(request, instructions);

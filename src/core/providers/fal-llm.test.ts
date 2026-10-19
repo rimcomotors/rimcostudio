@@ -8,12 +8,12 @@ const generated = {
 };
 
 describe('fal LLM brief adapter', () => {
-  it('keeps reasoning out of the JSON answer and allows enough tokens for a complete storyboard', () => {
+  it('uses the provider-compatible reasoning setting and allows enough tokens for a complete storyboard', () => {
     expect(buildFalLlmInput('brief', 'system', 'anthropic/claude-sonnet-5.5')).toEqual({
       prompt: 'brief',
       system_prompt: 'system',
       model: 'anthropic/claude-sonnet-5.5',
-      reasoning: false,
+      reasoning: true,
       temperature: 0.2,
       max_tokens: 4000,
     });
