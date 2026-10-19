@@ -258,7 +258,7 @@ grant select on public.model_catalog to authenticated;
 -- Storage objects are private. Uploads go into a first-level folder named with auth.uid().
 insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types) values
   ('assets','assets',false,26214400,array['image/jpeg','image/png','image/webp']::text[]),
-  ('videos','videos',false,104857600,array['video/mp4']::text[]),
+  ('videos','videos',false,104857600,array['video/mp4','image/jpeg','image/png','image/webp']::text[]),
   ('audio','audio',false,26214400,array['audio/mpeg','audio/wav','audio/mp4']::text[]),
   ('brand','brand',false,26214400,array['image/jpeg','image/png','image/webp']::text[])
 on conflict(id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;

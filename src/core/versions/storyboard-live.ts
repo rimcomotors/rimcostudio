@@ -7,6 +7,7 @@ import { buildKeyframeAnimationPrompt, buildKeyframePrompt, canAnimateKeyframes,
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { keyframeImageUploadTarget } from '@/core/storage/keyframe-image';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { calculateClientPriceFcfa } from '@/core/pricing';
@@ -388,15 +389,26 @@ async function refreshKeyframes(input: {
       if (!response.ok) throw new HttpError(502, `Impossible de récupérer l’image-clé ${shotNumber}.`);
       const bytes = await readBoundedImage(response, MAX_IMAGE_BYTES);
       const contentType = state.contentType;
-      const extension = contentType === 'image/jpeg' ? 'jpg' : contentType === 'image/webp' ? 'webp' : 'png';
-      const keyframePath = `${version.video_id}/${version.id}/keyframe-${shotNumber}.${extension}`;
-      const { error: uploadError } = await admin.storage.from('videos').upload(keyframePath, bytes, { contentType, upsert: true });
-      if (uploadError) throw new HttpError(502, `Impossible d’enregistrer l’image-clé ${shotNumber}.`);
-      const { data: signed, error: signedError } = await admin.storage.from('videos').createSignedUrl(keyframePath, 3600);
+      const target = keyframeImageUploadTarget({ videoId: version.video_id, versionId: version.id, shotNumber, contentType });
+      const { error: uploadError } = await admin.storage.from(target.bucket).upload(target.path, bytes, target.options);
+      if (uploadError) {
+        console.error('keyframe_storage_upload_failed', JSON.stringify({
+          versionId: version.id,
+          shotNumber,
+          code: uploadError.name,
+          message: uploadError.message,
+        }));
+        await Promise.all([
+          settleUsageCost(admin, { entryId: qualityLedgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }),
+          admin.from('video_shots').update({ keyframe_status: 'failed', error_message: `Impossible d’enregistrer l’image-clé ${shotNumber}.`, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber),
+        ]);
+        return;
+      }
+      const { data: signed, error: signedError } = await admin.storage.from(target.bucket).createSignedUrl(target.path, 3600);
       if (signedError || !signed?.signedUrl) throw new HttpError(503, 'Impossible de créer le lien de contrôle temporaire.');
       const visionPrompt = `Compare les images reçues dans cet ordre : image 1 = candidat image-clé, image 2 = véhicule approuvé, image 3 éventuelle = lieu sélectionné. Le candidat doit conserver strictement le véhicule et sa couleur visibles dans la référence; respecter le lieu et la composition demandés; ne contenir aucun texte ajouté, logo inventé ni plaque lisible. Vérifie aussi une lumière et une échelle plausibles. Réponds avec approved=true seulement si aucun défaut manifeste. Sinon liste précisément les défauts. Plan: ${draft.title}; scène: ${draft.scene}; cadrage: ${draft.framing}; lieu: ${draft.location}.`;
       const qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signed.signedUrl, ...referenceUrls] }, apiKey);
-      const { error: updateError } = await admin.from('video_shots').update({ keyframe_status: 'checking', keyframe_path: keyframePath, keyframe_quality_request_id: qualityJob.requestId, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+      const { error: updateError } = await admin.from('video_shots').update({ keyframe_status: 'checking', keyframe_path: target.path, keyframe_quality_request_id: qualityJob.requestId, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
       if (updateError) {
         await settleUsageCost(admin, { entryId: qualityLedgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
         throw new HttpError(503, `Impossible d’enregistrer le contrôle de l’image-clé ${shotNumber}.`);

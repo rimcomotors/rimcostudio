@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { vehicleCategories } from '@/core/scenes/catalog';
+import { MAX_STORYBOARD_DIRECTION_LENGTH } from '@/core/storyboard-direction';
 export const requestSchema = z.object({
-  description: z.string().trim().max(500).default(''),
+  description: z.string().trim().max(MAX_STORYBOARD_DIRECTION_LENGTH).default(''),
   title: z.string().trim().max(120).default(''),
   assetId: z.string().min(1),
   vehicleDossierId: z.string().uuid().nullable().optional(),
