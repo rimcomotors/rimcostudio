@@ -48,7 +48,40 @@ function outputText(result: unknown): string {
 
 function parseJson(text: string): unknown {
   const normalized = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  return JSON.parse(normalized) as unknown;
+  try {
+    return JSON.parse(normalized) as unknown;
+  } catch (initialError) {
+    for (let start = normalized.indexOf('{'); start >= 0; start = normalized.indexOf('{', start + 1)) {
+      const candidate = findCompleteJsonObject(normalized, start);
+      if (!candidate) continue;
+      try {
+        return JSON.parse(candidate) as unknown;
+      } catch { /* Try the next object, such as when the model included an example first. */ }
+    }
+    throw initialError;
+  }
+}
+
+function findCompleteJsonObject(text: string, start: number): string | null {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === '\\') escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') inString = true;
+    else if (character === '{') depth += 1;
+    else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+  return null;
 }
 
 function incompleteResponseIssue(response: unknown): string | null {
@@ -66,7 +99,7 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
   let hasReportedCost = false;
   let completedRequests = 0;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire : renvoie un seul objet JSON complet, sans raisonnement, commentaire ni balisage Markdown. Respecte exactement le schéma demandé.`;
+    const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire : la réponse précédente était incomplète ou invalide. Retourne un JSON compact et complet, sans raisonnement (no reasoning), commentaire, préambule ni Markdown. Garde les valeurs textuelles très courtes, respecte strictement le schéma et ses limites, conserve les identifiants fournis à l’identique, et ferme toutes les chaînes et accolades.`;
     let response: unknown;
     try {
       response = await call(request, instructions);

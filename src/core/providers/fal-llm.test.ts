@@ -30,7 +30,30 @@ describe('fal LLM brief adapter', () => {
     expect(result).toMatchObject({ fields: { shots: [] }, costUsd: 0.02 });
     expect(call).toHaveBeenCalledTimes(2);
     expect(call.mock.calls[1][0]).toContain('Correction obligatoire');
+    expect(call.mock.calls[1][0]).toContain('compact');
+    expect(call.mock.calls[1][0]).toContain('reasoning');
     expect(call.mock.calls[1][0]).not.toContain('Unterminated string');
+  });
+
+  it('extracts a complete JSON object surrounded by model prose or a markdown fence', async () => {
+    const call = vi.fn().mockResolvedValue({ output: `Voici le storyboard demandé :\n\n\`\`\`json\n${JSON.stringify({ shots: ['plan 1'] })}\n\`\`\`` });
+    const schema = z.object({ shots: z.array(z.string()) });
+
+    await expect(createFalLlmProvider(call).buildStoryboardWithCost('brief', schema, 'JSON only'))
+      .resolves.toMatchObject({ fields: { shots: ['plan 1'] } });
+  });
+
+  it('recovers from a truncated first answer with a compact second answer', async () => {
+    const call = vi.fn()
+      .mockResolvedValueOnce({ output: '{"shots":[{"title":"Plan interrompu' })
+      .mockResolvedValueOnce({ output: JSON.stringify({ shots: ['plan 1'] }) });
+    const schema = z.object({ shots: z.array(z.string()) });
+
+    await expect(createFalLlmProvider(call).buildStoryboardWithCost('brief', schema, 'JSON only'))
+      .resolves.toMatchObject({ fields: { shots: ['plan 1'] } });
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls[1][0]).toContain('Correction obligatoire');
+    expect(call.mock.calls[1][0]).toContain('JSON compact');
   });
 
   it('builds a validated structured brief and anchors vehicle identity and duration server-side', async () => {
