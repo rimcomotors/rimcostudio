@@ -15,16 +15,17 @@ describe('règles de routage vidéo', () => {
     expect(getRouteForGeneration('pro', 20)).toBeNull();
   });
 
-  it('route Premium selon la durée', () => {
-    expect(getRouteForGeneration('premium', 5)).toMatchObject({ adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/image-to-video', sourceDuration: 5 });
-    expect(getRouteForGeneration('premium', 10)).toMatchObject({ adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/image-to-video' });
-    expect(getRouteForGeneration('premium', 30)).toMatchObject({ adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/image-to-video' });
+  it('réserve Premium à Seedance en 20 secondes', () => {
+    expect(getRouteForGeneration('premium', 20)).toMatchObject({ adapterFamily: 'seedance', endpoint: 'bytedance/seedance-2.5/image-to-video', sourceDuration: 20 });
+    expect(getRouteForGeneration('premium', 5)).toBeNull();
+    expect(getRouteForGeneration('premium', 10)).toBeNull();
+    expect(getRouteForGeneration('premium', 30)).toBeNull();
   });
 
   it('expose uniquement les durées prévues pour chaque niveau', () => {
     expect(getRoutedDurations('standard')).toEqual([5]);
     expect(getRoutedDurations('pro')).toEqual([5, 10, 15]);
-    expect(getRoutedDurations('premium')).toEqual([5, 10, 15, 20, 30]);
+    expect(getRoutedDurations('premium')).toEqual([20]);
   });
 
   it('rejette un modèle hors route même si son endpoint est actif', () => {

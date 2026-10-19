@@ -15,7 +15,7 @@ import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
 import { deleteVersionsByVideoIds } from '@/core/versions/store';
 import { aggregateGenerationCost } from '@/core/billing/aggregate';
-import { photoFidelityShotSchema, singleShotStoryboardSchema, storyboardSchema, validatePhotoFidelityPlan, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
+import { isTierDurationSupported, photoFidelityShotSchema, singleShotStoryboardSchema, storyboardSchema, validatePhotoFidelityPlan, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard } from '@/core/storyboard';
 import { createLiveStoryboard } from '@/core/versions/storyboard-live';
 import { createLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
@@ -144,6 +144,8 @@ export async function POST(request: Request) {
     const payload = await request.json();
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'photo_fidelity') {
       const input = photoFidelitySchema.parse(payload);
+      if (!isTierDurationSupported(input.storyMode, input.clipDurationSeconds)) throw new HttpError(422, 'Le niveau Premium est disponible uniquement en storyboard IA de quatre plans de 5 secondes.');
+      if (input.storyMode === 'premium') throw new HttpError(422, 'Le niveau Premium utilise la génération IA avec quatre plans de 5 secondes.');
       validatePhotoFidelityPlan(input.storyboard, input.clipDurationSeconds);
       if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
         return NextResponse.json({ id: crypto.randomUUID(), status: 'ready', videoUrl: '/mock/mock-video.mp4', prompt: 'Simulation du montage à partir des photos sources.', estimatedPriceFcfa: 0, fidelityStatus: 'Simulation — aucune image générée par IA n’a été utilisée.' }, { status: 201 });
@@ -152,6 +154,8 @@ export async function POST(request: Request) {
     }
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'single_storyboard') {
       const single = singleStoryboardSchema.parse(payload);
+      if (!isTierDurationSupported(single.storyMode, single.clipDurationSeconds)) throw new HttpError(422, 'Le niveau Premium est disponible uniquement en 20 secondes.');
+      if (single.storyMode === 'premium') throw new HttpError(422, 'Le niveau Premium utilise quatre plans de 5 secondes, pas un plan unique.');
       validateSingleShotStoryboard(single.storyboard, single.clipDurationSeconds, getStoryboardModeRoute(single.storyMode).adapterFamily);
       if (single.tier !== single.storyMode) throw new HttpError(422, 'Le mode de génération doit correspondre au storyboard validé.');
       if (single.audioAssetId) throw new HttpError(422, 'Le storyboard est sans audio pour le moment.');
@@ -162,6 +166,8 @@ export async function POST(request: Request) {
     }
     if (payload && typeof payload === 'object' && 'workflow' in payload && payload.workflow === 'multi_clip') {
       const multi = multiClipSchema.parse(payload);
+      if (!isTierDurationSupported(multi.storyMode, multi.clipDurationSeconds)) throw new HttpError(422, 'Le niveau Premium est disponible uniquement en 20 secondes.');
+      if (multi.storyMode === 'premium') validatePremiumTwentySecondStoryboard(multi.storyboard);
       validateStoryboard(multi.storyboard, multi.clipDurationSeconds, getStoryboardModeRoute(multi.storyMode).adapterFamily);
       if (multi.audioAssetId) throw new HttpError(422, 'Le storyboard multi-plans est sans audio pour le moment.');
       if (env.PROVIDERS_MODE === 'mock') {
@@ -170,6 +176,7 @@ export async function POST(request: Request) {
       return NextResponse.json(await createLiveStoryboard(actor, multi), { status: 201 });
     }
     const input = requestSchema.parse(payload);
+    if (input.tier === 'premium') throw new HttpError(422, 'Les créations Premium passent par le storyboard IA de quatre plans de 5 secondes.');
     if (env.PROVIDERS_MODE === 'mock' && input.durationS !== 5) throw new HttpError(422, 'Les durées longues sont disponibles uniquement sur un environnement de génération actif.');
     if (input.scenePresetId && !getScenePreset(input.scenePresetId)) throw new HttpError(422, 'La scène sélectionnée est introuvable.');
     const selectedScene = input.scenePresetId ? getScenePreset(input.scenePresetId) : undefined;

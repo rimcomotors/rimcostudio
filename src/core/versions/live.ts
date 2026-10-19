@@ -16,7 +16,7 @@ import { beginPostproduction, retryPostproduction } from '@/core/postproduction/
 import { approveCompletedAdminVideo } from '@/core/versions/approval';
 import { refreshLivePhotoFidelity } from '@/core/versions/photo-fidelity';
 import { getScenePreset, inferVehicleCategory } from '@/core/scenes/catalog';
-import { calculateClientPriceFcfa } from '@/core/pricing';
+import { estimateGridPriceFcfa } from '@/core/pricing';
 import { refreshLiveStoryboard } from './storyboard-live';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { reserveGenerationCost, reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
@@ -122,8 +122,12 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
   const llmBriefOptions = Object.fromEntries(Object.entries(briefOptions).map(([key, value]) => [key, String(value)]));
   const initialBrief = options?.reuse?.brief ?? buildBrief(input.description || 'Vidéo automobile réaliste et élégante.', briefOptions);
   if (initialBrief.vehicle_asset_id !== asset.id || initialBrief.format !== input.format) throw new HttpError(422, 'Le brief commun ne correspond pas à la photo ou au format sélectionné.');
-  const estimatedProviderCostUsd = sourceDurationS * Number(model.price_usd_per_second);
-  const priceFcfa = calculateClientPriceFcfa(estimatedProviderCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
+  const { data: pricingSettings, error: pricingError } = await admin.from('pricing_settings')
+    .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
+  if (pricingError || !pricingSettings) throw new HttpError(503, 'La grille tarifaire de votre marque n’est pas configurée.');
+  const priceFcfa = estimateGridPriceFcfa(input.durationS, input.tier, {
+    standard: Number(pricingSettings.grid_fcfa_per_second_standard), premium: Number(pricingSettings.grid_fcfa_per_second_premium),
+  });
   const videoTitle = input.title || `${vehicleMake ?? ''} ${vehicleModel ?? 'Véhicule'} · Nouvelle création`.trim();
   const falCredential = await getActiveFalCredential(admin);
   const { data: video, error: videoError } = await admin.from('videos').insert({ user_id: actor.id, brand_id: actor.brandId, title: videoTitle, department: actor.department, status: 'generating' }).select('id').single();

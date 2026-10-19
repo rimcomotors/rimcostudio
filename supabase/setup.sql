@@ -826,3 +826,19 @@ create index if not exists video_shots_video_quality_status_idx
   on public.video_shots(version_id, video_quality_status)
   where video_quality_status in ('queued','checking','retrying');
 notify pgrst, 'reload schema';
+
+-- 0029_premium_twenty_and_atomic_submission.sql
+alter table public.video_shots add column if not exists animation_submit_state text not null default 'queued'
+  check (animation_submit_state in ('queued','submitting','submitted','failed','reconciliation'));
+alter table public.video_shots add column if not exists animation_submit_started_at timestamptz;
+update public.video_shots
+set animation_submit_state = case
+  when provider_request_id is not null then 'submitted'
+  when provider_reconciliation_required then 'reconciliation'
+  when status = 'failed' then 'failed'
+  else 'queued'
+end
+where animation_submit_state = 'queued';
+create index if not exists video_shots_animation_submit_state_idx
+  on public.video_shots(version_id, animation_submit_state, shot_number);
+notify pgrst, 'reload schema';

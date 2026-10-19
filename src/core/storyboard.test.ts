@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBrief } from '@/core/brief';
-import { buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, fitStoryboardDurations, getSingleShotClipDurations, isPremiumTenSecondAd, premiumTenSecondAdDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validatePremiumTenSecondAdStoryboard, validateStoryboard } from './storyboard';
+import { buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, fitStoryboardDurations, getSingleShotClipDurations, isPremiumTenSecondAd, premiumTenSecondAdDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateStoryboard, validateTierDuration } from './storyboard';
 
 const shots = [
   { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 8, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
@@ -8,6 +8,29 @@ const shots = [
 ];
 
 describe('storyboard', () => {
+  it('allows only 20 seconds for Premium and keeps other tier durations available', () => {
+    expect(validateTierDuration('premium', 20)).toBe(true);
+    for (const duration of [5, 10, 15] as const) expect(() => validateTierDuration('premium', duration)).toThrow(/20 secondes/i);
+    expect(validateTierDuration('standard', 5)).toBe(true);
+    expect(validateTierDuration('pro', 15)).toBe(true);
+  });
+
+  it('requires exactly four 5-second shots for a Premium 20-second storyboard', () => {
+    const premiumShots = Array.from({ length: 4 }, (_, index) => ({ ...shots[index % 2], title: `Premium ${index + 1}`, durationSeconds: 5 }));
+    expect(validatePremiumTwentySecondStoryboard(premiumShots)).toBe(true);
+    expect(() => validatePremiumTwentySecondStoryboard(premiumShots.slice(0, 3))).toThrow(/quatre plans de 5 secondes/i);
+    expect(() => validatePremiumTwentySecondStoryboard(premiumShots.map((shot, index) => ({ ...shot, durationSeconds: index === 0 ? 4 : 5 })))).toThrow(/quatre plans de 5 secondes/i);
+  });
+
+  it('asks the Premium director for four full 5-second shots at 20 seconds', () => {
+    const instruction = buildStoryboardInstruction({
+      durationSeconds: 20, mode: 'premium', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }],
+      places: [{ id: 'hkb', title: 'Pont HKB' }], purpose: 'advertising', format: '16:9',
+    });
+    expect(instruction).toContain('Use exactly four distinct shots of exactly 5 seconds each');
+    expect(instruction).toContain('preserve the full 20-second edit without trimming');
+  });
+
   it('accepts two or more complete shots with explicit reference images and durations', () => {
     expect(storyboardSchema.parse(shots)).toHaveLength(2);
     expect(() => shotDraftSchema.parse({ ...shots[0], durationSeconds: 0 })).toThrow();

@@ -20,11 +20,7 @@ export const LOCKED_MODEL_POLICY = [
   { tier: 'pro', duration: 5, model: 'Kling O3 Pro' },
   { tier: 'pro', duration: 10, model: 'Kling O3 Pro' },
   { tier: 'pro', duration: 15, model: 'Kling O3 Pro' },
-  { tier: 'premium', duration: 5, model: 'Seedance 2.5' },
-  { tier: 'premium', duration: 10, model: 'Seedance 2.5' },
-  { tier: 'premium', duration: 15, model: 'Seedance 2.5' },
   { tier: 'premium', duration: 20, model: 'Seedance 2.5' },
-  { tier: 'premium', duration: 30, model: 'Seedance 2.5' },
 ] as const;
 
 type Route = {
@@ -45,11 +41,7 @@ const ROUTES: Record<GenerationTier, Record<number, Route>> = {
     15: { tier: 'pro', adapterFamily: 'kling', endpoint: MODEL_ENDPOINTS.kling, outputDuration: 15, sourceDuration: 15 },
   },
   premium: {
-    5: { tier: 'premium', adapterFamily: 'seedance', endpoint: MODEL_ENDPOINTS.seedance, outputDuration: 5, sourceDuration: 5 },
-    10: { tier: 'premium', adapterFamily: 'seedance', endpoint: MODEL_ENDPOINTS.seedance, outputDuration: 10, sourceDuration: 10 },
-    15: { tier: 'premium', adapterFamily: 'seedance', endpoint: MODEL_ENDPOINTS.seedance, outputDuration: 15, sourceDuration: 15 },
     20: { tier: 'premium', adapterFamily: 'seedance', endpoint: MODEL_ENDPOINTS.seedance, outputDuration: 20, sourceDuration: 20 },
-    30: { tier: 'premium', adapterFamily: 'seedance', endpoint: MODEL_ENDPOINTS.seedance, outputDuration: 30, sourceDuration: 30 },
   },
 };
 

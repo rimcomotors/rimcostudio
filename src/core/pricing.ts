@@ -14,6 +14,14 @@ export function estimatePriceFcfa(seconds:number,tier:Tier):number {
   return Math.round(seconds*pricePerSecond);
 }
 
+export function estimateGridPriceFcfa(seconds: number, tier: Tier, grid: { standard: number; premium: number }): number {
+  assertPositive(seconds, 'La durée');
+  assertNonNegative(grid.standard, 'Le tarif Standard');
+  assertNonNegative(grid.premium, 'Le tarif Premium');
+  const pricePerSecond = tier === 'standard' ? grid.standard : grid.premium;
+  return Math.round(seconds * pricePerSecond);
+}
+
 export function estimateRealCost(seconds:number,usdPerSecond:number,usdToEur:number,eurToFcfa:number){
   assertPositive(seconds,'La durée');
   assertNonNegative(usdPerSecond,'Le tarif fournisseur');
@@ -24,7 +32,7 @@ export function estimateRealCost(seconds:number,usdPerSecond:number,usdToEur:num
   return {costUsd,costEur,costRealFcfa:costEur*eurToFcfa};
 }
 
-/** Client billing is the combined provider usage estimate converted to FCFA, plus a 30% markup. */
+/** Legacy estimate for displays that have no brand pricing grid available. */
 export function calculateClientPriceFcfa(costUsd:number,usdToEur:number,eurToFcfa:number):number {
   assertNonNegative(costUsd,'Le coût fournisseur');
   assertPositive(usdToEur,'Le taux USD/EUR');

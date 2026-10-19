@@ -4,14 +4,14 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, fitStoryboardDurations, getSingleShotClipDurations, isPremiumTenSecondAd, singleShotStoryboardSchema, storyboardSchema, validatePremiumTenSecondAdStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
+import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, fitStoryboardDurations, isPremiumTenSecondAd, isTierDurationSupported, singleShotStoryboardSchema, storyboardSchema, validatePremiumTenSecondAdStoryboard, validatePremiumTwentySecondStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { getActiveFalCredential } from '@/core/providers/fal-credential-vault';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
 import { findCuratedLocation } from '@/core/assets/location-catalog';
-import { calculateClientPriceFcfa } from '@/core/pricing';
+import { estimateGridPriceFcfa } from '@/core/pricing';
 import { storyboardDirectionSchema } from '@/core/storyboard-direction';
 
 const requestSchema = z.object({
@@ -50,7 +50,10 @@ export async function POST(request: Request) {
       }, { status: 422 });
     }
     const input = parsedInput.data;
+    if (!isTierDurationSupported(input.mode, input.durationSeconds)) throw new HttpError(422, 'Le niveau Premium est disponible uniquement en 20 secondes.');
+    if (input.mode === 'premium' && input.workflow !== 'multi_clip') throw new HttpError(422, 'Le niveau Premium utilise quatre plans de 5 secondes.');
     const premiumTenSecondAd = input.workflow === 'multi_clip' && isPremiumTenSecondAd(input.mode, input.purpose, input.durationSeconds);
+    const premiumTwentySecond = input.workflow === 'multi_clip' && input.mode === 'premium' && input.durationSeconds === 20;
     if (input.workflow === 'multi_clip' && input.durationSeconds < 10) throw new HttpError(422, 'Le workflow multi-plans demande au moins 10 secondes de clips.');
     const supabase = await createSupabaseServerClient();
     const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
@@ -106,16 +109,18 @@ export async function POST(request: Request) {
         ? [total]
         : premiumTenSecondAd ? [2, 3, 2, 3]
         : input.mode === 'standard' ? Array.from({ length: total / 5 }, () => 5)
+            : premiumTwentySecond ? [5, 5, 5, 5]
           : total === 10 ? [5, 5] : total === 15 ? [8, 7] : [10, 10];
       const premiumTitles = ['Décor et révélation', 'Suivi trois-quarts', 'Détail du véhicule', 'Plan héros'];
       const premiumActions = ['Le véhicule apparaît dans le lieu choisi.', 'La caméra suit le véhicule de façon fluide.', 'Un détail visible sur les photos devient le sujet du plan.', 'Le véhicule s’immobilise dans un cadrage trois-quarts élégant.'];
+      const premiumCreative = premiumTenSecondAd || premiumTwentySecond;
       const drafts = durations.map((durationSeconds, index) => ({
-        title: premiumTenSecondAd ? premiumTitles[index] : index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
-        scene: premiumTenSecondAd ? ['Vue large du lieu', 'Suivi extérieur du véhicule', 'Détail extérieur appuyé par les photos', 'Trois-quarts avant en plan héros'][index] : index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',
-        framing: premiumTenSecondAd ? ['Plan large', 'Plan moyen trois-quarts', 'Gros plan autorisé par la photo', 'Plan héros trois-quarts avant'][index] : 'Plan moyen',
+        title: premiumCreative ? premiumTitles[index] : index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
+        scene: premiumCreative ? ['Vue large du lieu', 'Suivi extérieur du véhicule', 'Détail extérieur appuyé par les photos', 'Trois-quarts avant en plan héros'][index] : index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',
+        framing: premiumCreative ? ['Plan large', 'Plan moyen trois-quarts', 'Gros plan autorisé par la photo', 'Plan héros trois-quarts avant'][index] : 'Plan moyen',
         location: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.title ?? 'Abidjan, Côte d’Ivoire',
-        action: premiumTenSecondAd ? premiumActions[index] : index === 0 ? 'Le véhicule avance doucement dans son environnement réel.' : 'La caméra révèle les lignes et finitions présentes sur les photos.',
-        camera: premiumTenSecondAd ? ['Travelling d’établissement lent', 'Suivi latéral stabilisé', 'Mouvement macro doux, sans changement d’angle inventé', 'Travelling avant fluide puis arrêt'][index] : index === 0 ? 'Travelling latéral lent et stable' : 'Mouvement rapproché fluide',
+        action: premiumCreative ? premiumActions[index] : index === 0 ? 'Le véhicule avance doucement dans son environnement réel.' : 'La caméra révèle les lignes et finitions présentes sur les photos.',
+        camera: premiumCreative ? ['Travelling d’établissement lent', 'Suivi latéral stabilisé', 'Mouvement macro doux, sans changement d’angle inventé', 'Travelling avant fluide puis arrêt'][index] : index === 0 ? 'Travelling latéral lent et stable' : 'Mouvement rapproché fluide',
         durationSeconds,
         vehiclePhotoId: selectedVehicle[index % selectedVehicle.length].id,
         locationPhotoId: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.id ?? null,
@@ -127,7 +132,9 @@ export async function POST(request: Request) {
       if (!env.LLM_MODEL) throw new HttpError(503, 'Le modèle de storyboard IA n’est pas configuré.');
       const falCredential = await getActiveFalCredential(admin);
       falApiKeyForRedaction = falCredential.apiKey;
-      const { data: videoModel } = await admin.from('ai_models').select('price_usd_per_second').eq('fal_endpoint_id', route.endpoint).eq('is_active', true).maybeSingle();
+      const { data: pricing, error: pricingError } = await admin.from('pricing_settings')
+        .select('grid_fcfa_per_second_standard,grid_fcfa_per_second_premium').eq('brand_id', actor.brandId).maybeSingle();
+      if (pricingError || !pricing) throw new HttpError(503, 'La grille tarifaire de votre marque n’est pas configurée.');
       const { data: reservation, error: reservationError } = await reserveLlmCost(admin, {
         userId: actor.id, department: actor.department, maxCostUsd: llmReservationUsd(env.LLM_MAX_COST_USD ?? 0),
         usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
@@ -144,18 +151,16 @@ export async function POST(request: Request) {
           : z.object({ shots: storyboardSchema }).strict().transform(({ shots }) => ({
               shots: premiumTenSecondAd
                 ? (validatePremiumTenSecondAdStoryboard(shots), shots)
+                : premiumTwentySecond
+                  ? (validatePremiumTwentySecondStoryboard(shots), shots)
                 : fitStoryboardDurations(shots, input.durationSeconds, route.adapterFamily),
             }));
         const result = await provider.buildStoryboardWithCost(instruction, responseSchema, 'You are an expert automotive commercial director. Return only JSON matching the requested schema. Use French for all creative text.');
         shots = result.fields.shots;
         storyboardCostUsd = result.costUsd ?? (env.LLM_MAX_COST_USD ?? 0) * result.completedRequests;
-        if (videoModel) {
-          const generationSeconds = input.workflow === 'single'
-            ? getSingleShotClipDurations(input.durationSeconds as ClipDurationSeconds, route.adapterFamily).reduce((sum, seconds) => sum + seconds, 0)
-            : input.durationSeconds;
-          const videoCostUsd = generationSeconds * Number(videoModel.price_usd_per_second);
-          totalEstimatedPriceFcfa = calculateClientPriceFcfa(videoCostUsd + storyboardCostUsd, env.USD_TO_EUR_RATE, env.EUR_TO_FCFA);
-        }
+        totalEstimatedPriceFcfa = estimateGridPriceFcfa(input.durationSeconds, input.mode, {
+          standard: Number(pricing.grid_fcfa_per_second_standard), premium: Number(pricing.grid_fcfa_per_second_premium),
+        });
         const { error: settleError } = await settleUsageCost(admin, { entryId: reservation, outcome: 'charged', actualCostUsd: storyboardCostUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
         if (settleError) throw new HttpError(503, 'Le coût du storyboard n’a pas pu être clôturé.');
       } catch (cause) {
@@ -177,6 +182,7 @@ export async function POST(request: Request) {
     }
     if (input.workflow === 'single') validateSingleShotStoryboard(shots, input.durationSeconds as ClipDurationSeconds, route.adapterFamily);
     else if (premiumTenSecondAd) validatePremiumTenSecondAdStoryboard(shots);
+    else if (premiumTwentySecond) validatePremiumTwentySecondStoryboard(shots);
     else validateStoryboard(shots, input.durationSeconds, route.adapterFamily);
     const vehicleIds = new Set(selectedVehicle.map((photo) => photo.id));
     const placeIds = new Set(selectedPlaces.map((place) => place.id));

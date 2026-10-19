@@ -55,6 +55,9 @@ export const STORYBOARD_LOGO_SECONDS = 2;
 export const PREMIUM_AD_CLIP_SECONDS = 4;
 export const PREMIUM_AD_SHOT_COUNT = 4;
 export const PREMIUM_AD_SHOT_OUTPUT_SECONDS = 2.5;
+export const PREMIUM_FIXED_DURATION_SECONDS = 20;
+export const PREMIUM_FIXED_SHOT_SECONDS = 5;
+export const PREMIUM_FIXED_SHOT_COUNT = PREMIUM_FIXED_DURATION_SECONDS / PREMIUM_FIXED_SHOT_SECONDS;
 const providerLimits: Record<StoryProvider, { min: number; max: number }> = {
   wan: { min: 5, max: 5 },
   kling: { min: 3, max: 15 },
@@ -63,6 +66,25 @@ const providerLimits: Record<StoryProvider, { min: number; max: number }> = {
 
 export function finalVideoSeconds(clipDurationSeconds: ClipDurationSeconds): number {
   return clipDurationSeconds + STORYBOARD_LOGO_SECONDS;
+}
+
+export function isTierDurationSupported(mode: StoryMode, durationSeconds: ClipDurationSeconds): boolean {
+  return mode !== 'premium' || durationSeconds === PREMIUM_FIXED_DURATION_SECONDS;
+}
+
+export function validateTierDuration(mode: StoryMode, durationSeconds: ClipDurationSeconds): true {
+  if (!isTierDurationSupported(mode, durationSeconds)) {
+    throw new Error('Le niveau Premium est disponible uniquement en 20 secondes, logo final inclus après le montage.');
+  }
+  return true;
+}
+
+export function validatePremiumTwentySecondStoryboard(shots: StoryboardShot[]): true {
+  const parsed = storyboardSchema.parse(shots);
+  if (parsed.length !== PREMIUM_FIXED_SHOT_COUNT || parsed.some((shot) => shot.durationSeconds !== PREMIUM_FIXED_SHOT_SECONDS)) {
+    throw new Error('Une vidéo Premium de 20 secondes doit contenir exactement quatre plans de 5 secondes.');
+  }
+  return true;
 }
 
 /** Split one approved creative direction into provider-safe clips when required. */
@@ -139,16 +161,21 @@ export function buildStoryboardInstruction(input: {
   lighting?: string;
 }) {
   const premiumTenSecondAd = input.mode === 'premium' && input.purpose === 'advertising' && input.durationSeconds === 10;
+  const premiumTwentySecond = input.mode === 'premium' && input.durationSeconds === PREMIUM_FIXED_DURATION_SECONDS;
   const limits = input.mode === 'standard' ? 'exactly 5' : input.mode === 'pro' ? '3 to 15' : '4 to 30';
   const purposeDirection = input.purpose === 'presentation'
     ? 'Make a faithful product presentation: open with a clear full-vehicle view, reveal only features and angles visibly supported by the references, keep movement understated, and finish on a composed exterior hero shot.'
     : 'Make a premium advertising arc: establish an evocative real Côte d’Ivoire setting, reveal the vehicle with a restrained cinematic move, and finish on a memorable exterior hero shot. Keep the creative treatment premium while keeping every vehicle detail and action plausible and reference-supported.';
-  const shotCount = premiumTenSecondAd ? PREMIUM_AD_SHOT_COUNT : input.durationSeconds / 5;
+  const shotCount = premiumTenSecondAd || premiumTwentySecond ? PREMIUM_AD_SHOT_COUNT : input.durationSeconds / 5;
   const shotCountDirection = premiumTenSecondAd
     ? `Use exactly ${shotCount} distinct shots. Their editorial durations must total exactly 10 seconds; use a mix of 2- and 3-second cuts. Each will be generated as a separate 4-second image-to-video clip and trimmed during editing.`
-    : `Use exactly ${shotCount} shots and make every shot exactly 5 seconds. This fixed duration keeps the complete sequence within ${input.mode} provider limits.`;
+    : premiumTwentySecond
+      ? 'Use exactly four distinct shots of exactly 5 seconds each. Generate each as an independent 5-second image-to-video clip; preserve the full 20-second edit without trimming. Build a clear premium trailer arc: establish the location, reveal the whole vehicle, show one reference-supported detail or movement, then finish on a composed hero shot. Keep visual continuity and vary framing without inventing unsupported vehicle views.'
+      : `Use exactly ${shotCount} shots and make every shot exactly 5 seconds. This fixed duration keeps the complete sequence within ${input.mode} provider limits.`;
   const durationDirection = premiumTenSecondAd
     ? 'Each editorial shot must last two or three seconds and the four cuts must total exactly ten seconds.'
+    : premiumTwentySecond
+      ? 'Every shot lasts exactly five seconds; all four shots total exactly twenty seconds before the two-second logo end card.'
     : `Each shot must be ${limits} seconds for ${input.mode}.`;
   const characterDirection = premiumTenSecondAd
     ? 'Absolutely no people anywhere in any shot: no driver, passenger, face, silhouette, or human reflection, including inside the vehicle. All windows remain empty, dark, or reflective.'

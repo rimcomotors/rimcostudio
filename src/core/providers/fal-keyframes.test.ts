@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, extractFalVisionResult, keyframeQualityAction, parseKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, videoQualityAction } from './fal-keyframes';
+import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, extractFalVisionResult, keyframeQualityAction, parseKeyframeQuality, selectKeyframeReferenceIds, shouldExcludePeople, shouldGenerateKeyframes, videoQualityAction } from './fal-keyframes';
 
 const { mockSubmit, mockStatus, mockResult } = vi.hoisted(() => ({ mockSubmit: vi.fn(), mockStatus: vi.fn(), mockResult: vi.fn() }));
 vi.mock('@fal-ai/client', () => ({ createFalClient: vi.fn(() => ({ queue: { submit: mockSubmit, status: mockStatus, result: mockResult } })) }));
 
 describe('fal keyframe helpers', () => {
   beforeEach(() => { vi.resetModules(); vi.stubEnv('FAL_KEY', 'test-fal-key'); mockSubmit.mockReset(); mockStatus.mockReset(); mockResult.mockReset(); });
+  it('excludes people unless the user explicitly requests them', () => {
+    expect(shouldExcludePeople('Aucun personnage', '')).toBe(true);
+    expect(shouldExcludePeople('as explicitly requested in the user direction; otherwise none', 'Une famille traverse Abidjan')).toBe(false);
+    expect(shouldExcludePeople('as explicitly requested in the user direction; otherwise none', 'Un SUV roule dans Abidjan')).toBe(true);
+    expect(shouldExcludePeople('Aucun personnage', 'Une famille traverse Abidjan')).toBe(true);
+    expect(shouldExcludePeople('as explicitly requested in the user direction; otherwise none', 'Pas de personnages visibles.')).toBe(true);
+  });
   it('creates a still-image direction from the approved shot without asking for motion', () => {
     const prompt = buildKeyframePrompt({
       shot: { title: 'Départ en famille', scene: 'Boulevard lagunaire', framing: 'Plan large', location: 'Abidjan', action: 'La famille prend place', camera: 'Contre-plongée discrète', durationSeconds: 5, vehiclePhotoId: 'vehicle-1', locationPhotoId: 'place-1' },
@@ -53,6 +60,18 @@ describe('fal keyframe helpers', () => {
     expect(result[0]).toBe('view-0');
     expect(result.at(-1)).toBe('place');
     expect(new Set(result).size).toBe(14);
+  });
+
+  it('prioritizes distinct vehicle angles before filling remaining reference slots', () => {
+    const vehiclePhotos = [
+      { id: 'front', angle: 'Avant', photo_role: 'exterior' },
+      ...Array.from({ length: 14 }, (_, index) => ({ id: `front-copy-${index}`, angle: 'Avant', photo_role: 'exterior' })),
+      { id: 'side', angle: 'Profil', photo_role: 'exterior' },
+      { id: 'rear', angle: 'Arrière', photo_role: 'exterior' },
+    ];
+    const result = selectKeyframeReferenceIds({ primaryVehiclePhotoId: 'front', vehiclePhotos, locationPhotoId: 'place' });
+    expect(result.slice(0, 3)).toEqual(['front', 'side', 'rear']);
+    expect(result.at(-1)).toBe('place');
   });
 
   it('describes dynamic reference roles when the quality model checks the candidate', () => {

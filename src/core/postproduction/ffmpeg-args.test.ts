@@ -26,6 +26,13 @@ describe('FFmpeg final video arguments', () => {
     expect(args.slice(-3)).toEqual(['-t', '12', '/tmp/final.mp4']);
   });
 
+  it('keeps four full five-second Premium clips and appends the two-second logo', () => {
+    const args = makeMultiClipMontageArgs({ shotFiles: ['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4', '/tmp/d.mp4'], shotDurations: [5, 5, 5, 5], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', clipDurationSeconds: 20, finalDurationSeconds: 22 });
+    expect(args.join(' ')).toContain('concat=n=4');
+    expect(args.join(' ')).toContain('trim=duration=20');
+    expect(args.slice(-3)).toEqual(['-t', '22', '/tmp/final.mp4']);
+  });
+
   it('overlays the RIMCO logo at the upper left and keeps the requested duration', () => {
     const args = makeFinalVideoArgs({ rawFile: '/tmp/raw.mp4', logoFile: '/app/public/brand/logo-rimco.png', outputFile: '/tmp/final.mp4', durationSeconds: 15, overlayLogo: true, audioFile: null, format: '9:16' });
     expect(args).toContain('/app/public/brand/logo-rimco.png');

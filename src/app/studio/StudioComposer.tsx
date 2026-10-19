@@ -8,12 +8,13 @@ import { getScenePresets, getScenePreset, inferVehicleCategory } from '@/core/sc
 import { MAX_STORYBOARD_DIRECTION_LENGTH } from '@/core/storyboard-direction';
 
 type Format = '16:9' | '9:16' | '1:1';
-type Job = { id: string; status: string; error?: string; prompt?: string; completedShots?: number; totalShots?: number; completedKeyframes?: number; totalKeyframes?: number; checkedQualityShots?: number; totalQualityShots?: number; shotProgress?: Array<{ number: number; title: string; status: string; qualityStatus: string }>; keyframes?: Array<{ number: number; title: string; url: string }>; estimatedPriceFcfa?: number; processingStage?: string; stageElapsedSeconds?: number | null };
+type Job = { id: string; status: string; error?: string; prompt?: string; completedShots?: number; totalShots?: number; completedKeyframes?: number; totalKeyframes?: number; checkedQualityShots?: number; totalQualityShots?: number; shotProgress?: Array<{ number: number; title: string; status: string; qualityStatus: string }>; keyframes?: Array<{ number: number; title: string; url: string }>; estimatedPriceFcfa?: number; processingStage?: string; stageElapsedSeconds?: number | null; nextPollInSeconds?: number; reconciliationRequired?: boolean };
 type Model = { id: string; tier: string; formats: Format[]; durations: number[]; estimatedPricesFcfa: Record<string, number>; isDefault: boolean };
 type VehicleDossier = { id: string | null; key: string; dossierIds?: string[]; make: string; model: string; color?: string | null; variant?: string | null; photos: Array<{ id: string; photoRole: string; title: string; angle?: string | null; previewUrl?: string | null }> };
 type PlaceAsset = { id: string; title?: string; category?: string; previewUrl?: string | null; isCurated?: boolean };
 type StoryShot = { title: string; scene: string; framing: string; location: string; action: string; camera: string; durationSeconds: number; vehiclePhotoId: string; locationPhotoId?: string | null };
 const durationOptions = [5, 10, 15, 20];
+const premiumDurationOptions = [20];
 const lightOptions = ['Lumière naturelle claire du matin'];
 
 function getLightingLabel(lighting: string): string {
@@ -71,8 +72,9 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const [locationAssetId, setLocationAssetId] = useState('');
 
   const selectedDossier = vehicleDossiers.find((vehicle) => vehicle.key === vehicleDossierId);
+  const availableDurationOptions = tier === 'premium' ? premiumDurationOptions : durationOptions;
   const effectivePlaceIds = durationS >= 10 ? placeIds : (locationAssetId ? [locationAssetId] : placeIds.slice(0, 1));
-  const multiClip = Boolean(selectedDossier && durationS >= 10 && (selectedDossier.photos.length > 1 || effectivePlaceIds.length > 1));
+  const multiClip = Boolean(selectedDossier && (tier === 'premium' || durationS >= 10 && (selectedDossier.photos.length > 1 || effectivePlaceIds.length > 1)));
   const selectedPhoto = selectedDossier?.photos.find((photo) => photo.id === assetId) ?? selectedDossier?.photos[0];
   const selectedAsset = selectedPhoto ? { ...selectedPhoto, make: selectedDossier?.make, model: selectedDossier?.model, color: selectedDossier?.color } : undefined;
   const vehicleCategory = inferVehicleCategory(selectedAsset?.make, selectedAsset?.model);
@@ -83,7 +85,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   const selectedScene = getScenePreset(scenePresetId) ?? relevantScenes[0];
   const storyboardModel = availableModels.find((model) => model.tier === tier && model.durations.includes(durationS) && model.formats.includes(format));
   const estimatedPriceFcfa = storyboardModel?.estimatedPricesFcfa[String(durationS)];
-  const generationActive = Boolean(job && !['ready', 'failed'].includes(job.status));
+  const generationActive = Boolean(job && !['ready', 'failed', 'cancelled'].includes(job.status));
   const lightingChoices = Array.from(new Map(sceneChoices.map((scene) => [getLightingLabel(scene.lighting), scene])).entries())
     .map(([label, scene]) => ({ label, scene }));
 
@@ -92,9 +94,9 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
   }
 
   useEffect(() => {
-    const allowed = durationOptions;
+    const allowed = availableDurationOptions;
     if (!allowed.includes(durationS)) setDurationS(allowed[0]);
-  }, [durationS, mode, storyboardModel, tier]);
+  }, [availableDurationOptions, durationS, mode, storyboardModel, tier]);
 
   useEffect(() => {
     if (mode !== 'live') return;
@@ -153,21 +155,33 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
 
   const jobId = job?.id;
   const jobStatus = job?.status;
+  const nextPollInSeconds = job?.nextPollInSeconds;
+  const reconciliationRequired = job?.reconciliationRequired;
   const refreshingJob = useRef(false);
   useEffect(() => {
-    if (!jobId || !jobStatus || ['ready', 'failed'].includes(jobStatus)) return;
-    const timer = window.setInterval(async () => {
-      if (refreshingJob.current) return;
+    if (!jobId || !jobStatus || ['ready', 'failed', 'cancelled'].includes(jobStatus) || reconciliationRequired) return;
+    let timer: number;
+    let active = true;
+    const schedule = (delaySeconds: number) => {
+      timer = window.setTimeout(async () => {
+      if (!active) return;
+      if (refreshingJob.current) { schedule(5); return; }
       refreshingJob.current = true;
       try {
         const response = await fetch(`/api/versions/${jobId}/refresh`, { cache: 'no-store', signal: AbortSignal.timeout(25_000) });
         const data = await response.json();
         setJob((previous) => previous ? { ...previous, ...data, error: response.ok ? data.error : data.error ?? 'Le suivi est momentanément indisponible. Nouvelle tentative automatique.' } : previous);
-      } catch { setJob((previous) => previous ? { ...previous, error: 'Le suivi est momentanément indisponible. Nouvelle tentative automatique.' } : previous); }
-      finally { refreshingJob.current = false; }
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [jobStatus, jobId]);
+        if (response.ok && !data.reconciliationRequired && !['ready', 'failed', 'cancelled'].includes(data.status)) schedule(data.nextPollInSeconds ?? 15);
+        else if (!response.ok) schedule(15);
+      } catch {
+        setJob((previous) => previous ? { ...previous, error: 'Le suivi est momentanément indisponible. Nouvelle tentative automatique.' } : previous);
+        schedule(15);
+      } finally { refreshingJob.current = false; }
+      }, Math.max(5, Math.min(180, delaySeconds)) * 1000);
+    };
+    schedule(nextPollInSeconds ?? 15);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [jobStatus, jobId, nextPollInSeconds, reconciliationRequired]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -230,12 +244,18 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
           </div>
         </section>
 
-      {job && <section className="rounded-md border border-black/[.055] bg-white p-5"><div className="flex items-center justify-between"><h2 className="text-sm font-semibold">État de la vidéo</h2><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : 'En cours'}</span></div><p className="mt-2 text-xs leading-5 text-[#88847d]">{job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.status === 'failed' ? job.error ?? 'La génération a échoué. Vous pouvez relancer une nouvelle vidéo.' : job.error ?? `${job.processingStage ? `${({ queued: 'En file d’attente', keyframing: `Création des images-clés${job.completedKeyframes != null && job.totalKeyframes != null ? ` · ${job.completedKeyframes}/${job.totalKeyframes}` : ''}`, generating: 'Génération vidéo', quality_checking: 'Contrôle qualité', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation' } as Record<string, string>)[job.processingStage] ?? 'Génération en cours'}${job.stageElapsedSeconds != null ? ` · ${job.stageElapsedSeconds} s` : ''}` : 'Génération en cours'}${job.totalQualityShots ? ` · ${job.checkedQualityShots ?? 0}/${job.totalQualityShots} plans contrôlés` : ''}. Actualisation automatique toutes les 5 secondes.`}</p>{job.shotProgress && <div className="mt-3 grid gap-1.5 sm:grid-cols-2">{job.shotProgress.map((shot) => <p key={shot.number} className="flex items-center justify-between gap-3 rounded border border-[#eeeae4] px-2.5 py-2 text-[10px] text-[#716d66]"><span className="truncate">Plan {shot.number} · {shot.title}</span><span className="shrink-0 font-semibold">{shotProgressLabel(shot)}</span></p>)}</div>}{job.keyframes && job.keyframes.length > 0 && <div className="mt-4 border-t border-[#eeeae4] pt-4"><p className="mb-3 text-[10px] font-semibold uppercase tracking-wide text-[#716d66]">Images-clés retenues</p><div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{job.keyframes.map((keyframe) => <figure key={keyframe.number} className="overflow-hidden rounded border border-[#eeeae4]"><Image src={keyframe.url} alt={`Image-clé ${keyframe.number} : ${keyframe.title}`} width={400} height={225} unoptimized className="aspect-video w-full object-cover" /><figcaption className="px-2 py-1.5 text-[10px] text-[#716d66]">{keyframe.number}. {keyframe.title}</figcaption></figure>)}</div></div>}{typeof job.estimatedPriceFcfa === 'number' && <p className="mt-3 border-t border-[#eeeae4] pt-3 text-xs font-semibold text-[#716d66]">{`Montant total estimé · environ ${formatFcfa(job.estimatedPriceFcfa)}`}</p>}{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}</section>}
+      {job && <section className="rounded-md border border-black/[.055] bg-white p-5">
+        <div className="flex items-center justify-between"><h2 className="text-sm font-semibold">État de la vidéo</h2><span className="text-[10px] font-semibold uppercase text-[#a47731]">{job.status === 'ready' ? 'Prête' : job.status === 'failed' ? 'Échec' : job.status === 'cancelled' ? 'Annulée' : job.reconciliationRequired ? 'Vérification requise' : 'En cours'}</span></div>
+        <p className="mt-2 text-xs leading-5 text-[#88847d]">{job.reconciliationRequired ? job.error ?? 'La génération doit être vérifiée avant toute relance. Aucune nouvelle soumission ne sera envoyée automatiquement.' : job.status === 'ready' ? 'Votre vidéo est prête à consulter.' : job.status === 'failed' ? job.error ?? 'La génération a échoué. Vous pouvez relancer une nouvelle vidéo.' : job.status === 'cancelled' ? 'La génération a été annulée.' : job.error ?? `${job.processingStage ? `${({ queued: 'En file d’attente', keyframing: `Création des images-clés${job.completedKeyframes != null && job.totalKeyframes != null ? ` · ${job.completedKeyframes}/${job.totalKeyframes}` : ''}`, generating: 'Génération vidéo', quality_checking: 'Contrôle qualité', transferring: 'Transfert du fichier', postprocessing: 'Logo et finalisation' } as Record<string, string>)[job.processingStage] ?? 'Génération en cours'}${job.stageElapsedSeconds != null ? ` · ${job.stageElapsedSeconds} s` : ''}` : 'Génération en cours'}${job.totalQualityShots ? ` · ${job.checkedQualityShots ?? 0}/${job.totalQualityShots} plans contrôlés` : ''}. Actualisation automatique selon le délai de suivi du fournisseur.`}</p>
+        {job.shotProgress && <div className="mt-3 grid gap-1.5 sm:grid-cols-2">{job.shotProgress.map((shot) => <p key={shot.number} className="flex items-center justify-between gap-3 rounded border border-[#eeeae4] px-2.5 py-2 text-[10px] text-[#716d66]"><span className="truncate">Plan {shot.number} · {shot.title}</span><span className="shrink-0 font-semibold">{shotProgressLabel(shot)}</span></p>)}</div>}
+        {job.keyframes && job.keyframes.length > 0 && <div className="mt-4 border-t border-[#eeeae4] pt-4"><p className="mb-3 text-[10px] font-semibold uppercase tracking-wide text-[#716d66]">Images-clés retenues</p><div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{job.keyframes.map((keyframe) => <figure key={keyframe.number} className="overflow-hidden rounded border border-[#eeeae4]"><Image src={keyframe.url} alt={`Image-clé ${keyframe.number} : ${keyframe.title}`} width={400} height={225} unoptimized className="aspect-video w-full object-cover" /><figcaption className="px-2 py-1.5 text-[10px] text-[#716d66]">{keyframe.number}. {keyframe.title}</figcaption></figure>)}</div></div>}
+        {typeof job.estimatedPriceFcfa === 'number' && <p className="mt-3 border-t border-[#eeeae4] pt-3 text-xs font-semibold text-[#716d66]">{`Montant total estimé · environ ${formatFcfa(job.estimatedPriceFcfa)}`}</p>}{job.prompt && <details className="mt-4 border-t border-[#eeeae4] pt-3"><summary className="cursor-pointer text-xs font-semibold text-[#716d66]">Voir le prompt généré</summary><p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-[#77736d]">{job.prompt}</p></details>}{job.status === 'ready' && <Link href="/bibliotheque" className="mt-4 block rounded-lg bg-[#c51e1c] px-3 py-2.5 text-center text-xs font-semibold text-white">Voir ma vidéo →</Link>}
+      </section>}
       </div>
 
       <aside id="generation-options" className="min-w-0 space-y-3 xl:sticky xl:top-5">
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
-          <fieldset><legend className="mb-2 text-[11px] font-semibold">Durée de la vidéo</legend><div className="flex flex-wrap gap-1.5">{durationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => { setDurationS(seconds); clearFormError(); if (seconds < 10 && placeIds.length > 1) setPlaceIds((current) => current.slice(0, 1)); }} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">{durationS} s de clips + 2 s de logo animé = {durationS + 2} s au total.</p></fieldset>
+          <fieldset><legend className="mb-2 text-[11px] font-semibold">Durée de la vidéo</legend><div className="flex flex-wrap gap-1.5">{availableDurationOptions.map((seconds) => <button type="button" key={seconds} onClick={() => { setDurationS(seconds); clearFormError(); if (seconds < 10 && placeIds.length > 1) setPlaceIds((current) => current.slice(0, 1)); }} aria-pressed={durationS === seconds} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${durationS === seconds ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{seconds} s</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">{tier === 'premium' ? 'Premium : quatre plans de 5 s + 2 s de logo animé = 22 s au total.' : `${durationS} s de clips + 2 s de logo animé = ${durationS + 2} s au total.`}</p></fieldset>
         </section>
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4 text-[#161619]">
@@ -260,7 +280,7 @@ export function StudioComposer({ mode }: { mode: 'mock' | 'live' }) {
 
         <section className="rounded-md border border-[#e2e2e5] bg-white p-4">
           <fieldset><legend className="mb-2 text-[11px] font-semibold">Format</legend><div className="flex flex-wrap gap-1.5">{(['16:9', '9:16', '1:1'] as const).map((value) => <button type="button" key={value} onClick={() => { setFormat(value); clearFormError(); }} aria-pressed={format === value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${format === value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{value}</button>)}</div></fieldset>
-          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); clearFormError(); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Clips générés : {durationS} s · vidéo finale avec logo : {durationS + 2} s.</p></fieldset>
+          <fieldset className="mt-4"><legend className="mb-2 text-[11px] font-semibold">Niveau de génération</legend><div className="grid grid-cols-3 gap-1.5">{([{ value: 'standard', label: 'Standard' }, { value: 'pro', label: 'Pro' }, { value: 'premium', label: 'Premium' }] as const).map((option) => <button type="button" key={option.value} onClick={() => { setTier(option.value); if (option.value === 'premium') setDurationS(20); clearFormError(); }} aria-pressed={tier === option.value} className={`rounded-full border px-2.5 py-1.5 text-[10px] ${tier === option.value ? 'border-[#c51e1c] bg-[#fff1ef] font-semibold text-[#b21c1a]' : 'border-[#e5e2dd] text-[#77736d]'}`}>{option.label}</button>)}</div><p className="mt-2 text-[9px] text-[#88847d]">Clips générés : {durationS} s · vidéo finale avec logo : {durationS + 2} s.</p></fieldset>
           {mode === 'live' && modelsError && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">{modelsError}</p>}
           {mode === 'live' && !modelsLoading && !modelsError && !storyboardModel && <p role="alert" className="mt-4 rounded-md bg-red-50 p-3 text-[10px] text-red-700">Aucune option disponible pour cette durée et ce format. Choisissez un autre niveau ou format.</p>}
           {mode === 'mock' && <p className="mt-4 rounded-md bg-[#fbf6ed] p-3 text-[10px] leading-4 text-[#765d39]">Simulation active : aucune vidéo payante ne sera générée.</p>}

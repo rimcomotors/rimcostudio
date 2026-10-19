@@ -23,6 +23,13 @@ function normalizedView(value: string | null | undefined) {
   return (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('fr');
 }
 
+export function shouldExcludePeople(character: string | null | undefined, direction: string | null | undefined): boolean {
+  const brief = `${character ?? ''} ${direction ?? ''}`.trim();
+  if (/\b(?:aucun|aucune|sans|pas de|no)\s+(?:personnages?|personnes?|famille|couple|conducteurs?|conductrices?|passagers?|passagères?|visages?|silhouettes?|people|persons?|drivers?|passengers?)\b/i.test(brief)) return true;
+  if (character?.trim() && !/as explicitly requested.*otherwise none/i.test(character)) return false;
+  return !/\b(?:famille|family|conducteur|conductrice|passager|passagère|personne|couple|enfant|homme|femme|vendeur|vendeuse|client|clients|driver|passenger|people|person)\b/i.test(direction ?? '');
+}
+
 export function selectKeyframeReferenceIds(input: {
   primaryVehiclePhotoId: string;
   vehiclePhotos: VehicleReference[];
@@ -36,7 +43,13 @@ export function selectKeyframeReferenceIds(input: {
   const candidates = distinct.filter((photo) => photo.id !== primary.id);
   const angleKey = (photo: VehicleReference) => normalizedView(photo.angle);
   const roleKey = (photo: VehicleReference) => normalizedView(photo.photo_role);
-  const uniqueAngles = candidates.filter((photo) => angleKey(photo) && angleKey(photo) !== angleKey(primary));
+  const selectedAngles = new Set([angleKey(primary)].filter(Boolean));
+  const uniqueAngles = candidates.filter((photo) => {
+    const angle = angleKey(photo);
+    if (!angle || selectedAngles.has(angle)) return false;
+    selectedAngles.add(angle);
+    return true;
+  });
   const selected = [primary, ...uniqueAngles];
   const selectedIds = new Set(selected.map((photo) => photo.id));
   for (const photo of candidates) {

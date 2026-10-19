@@ -1,5 +1,4 @@
 import type { createStorageAdminClient } from '@/core/storage/supabase';
-import { calculateClientPriceFcfa } from '@/core/pricing';
 
 type AdminClient = ReturnType<typeof createStorageAdminClient>;
 type Outcome = 'charged' | 'released';
@@ -134,10 +133,7 @@ export async function settleUsageCost(admin: AdminClient, input: {
   const patch: Record<string, number | string> = { status: input.outcome };
   if (input.outcome === 'charged') {
     const costEur = input.actualCostUsd * input.usdToEur;
-    const clientBillableCost = typeof entry.billable_cost_usd === 'number' ? entry.billable_cost_usd : input.actualCostUsd;
-    const priceFcfa = input.billable === false ? 0 : clientBillableCost > 0
-      ? calculateClientPriceFcfa(clientBillableCost, input.usdToEur, input.eurToFcfa)
-      : Number(entry.price_fcfa);
+    const priceFcfa = input.billable === false ? 0 : Number(entry.price_fcfa ?? 0);
     patch.cost_usd = input.actualCostUsd;
     if (input.actualSeconds !== undefined) patch.seconds = input.actualSeconds;
     patch.cost_eur = costEur;
