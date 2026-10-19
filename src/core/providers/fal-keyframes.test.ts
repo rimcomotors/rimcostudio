@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildKeyframeAnimationPrompt, buildKeyframePrompt, canAnimateKeyframes, keyframeQualityAction, parseKeyframeQuality, shouldGenerateKeyframes } from './fal-keyframes';
+import { buildKeyframeAnimationPrompt, buildKeyframePrompt, canAnimateKeyframes, extractFalVisionResult, keyframeQualityAction, parseKeyframeQuality, shouldGenerateKeyframes } from './fal-keyframes';
 
 const { mockSubmit, mockStatus, mockResult } = vi.hoisted(() => ({ mockSubmit: vi.fn(), mockStatus: vi.fn(), mockResult: vi.fn() }));
 vi.mock('@fal-ai/client', () => ({ createFalClient: vi.fn(() => ({ queue: { submit: mockSubmit, status: mockStatus, result: mockResult } })) }));
@@ -26,6 +26,28 @@ describe('fal keyframe helpers', () => {
     expect(parseKeyframeQuality('{"approved":"yes","issues":[],"reason":"x"}')).toBeNull();
   });
 
+  it('extracts the documented fal vision response and cost', () => {
+    expect(extractFalVisionResult({ data: { output: '{"approved":true,"issues":[],"reason":"Conforme"}', usage: { cost: 0.012 } } })).toEqual({
+      output: '{"approved":true,"issues":[],"reason":"Conforme"}', costUsd: 0.012,
+    });
+  });
+
+  it('extracts compatible flattened and chat-style vision responses', () => {
+    expect(extractFalVisionResult({ output: '```json\n{"approved":true,"issues":[],"reason":"OK"}\n```' })).toEqual({
+      output: '```json\n{"approved":true,"issues":[],"reason":"OK"}\n```', costUsd: null,
+    });
+    expect(extractFalVisionResult({ data: { choices: [{ message: { content: '{"approved":true,"issues":[],"reason":"OK"}' } }] } })).toEqual({
+      output: '{"approved":true,"issues":[],"reason":"OK"}', costUsd: null,
+    });
+  });
+
+  it('ignores unexpected quality metadata while requiring the complete decision fields', () => {
+    expect(parseKeyframeQuality('{"approved":true,"issues":[],"reason":"Conforme","confidence":0.98}')).toEqual({
+      approved: true, issues: [], reason: 'Conforme',
+    });
+    expect(parseKeyframeQuality('{"approved":true,"reason":"Conforme"}')).toBeNull();
+  });
+
   it('requires reasoning for the fal vision check endpoint', async () => {
     vi.stubEnv('LLM_MODEL', 'anthropic/claude-sonnet-5.5');
     mockSubmit.mockResolvedValue({ request_id: 'vision-check-1' });
@@ -36,6 +58,8 @@ describe('fal keyframe helpers', () => {
     expect(mockSubmit).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { input: expect.objectContaining({
       model: 'anthropic/claude-sonnet-5.5',
       reasoning: true,
+      max_tokens: 500,
+      system_prompt: expect.stringContaining('un seul objet JSON valide'),
       image_urls: ['https://assets.example/keyframe.png'],
     }) });
   });
@@ -49,6 +73,28 @@ describe('fal keyframe helpers', () => {
       status: 'failed', error: 'Provider rejected the response.',
     });
     expect(mockStatus).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { requestId: 'vision-check-failed', logs: true });
+  });
+
+  it('accepts the documented fal vision result and records its actual usage cost', async () => {
+    vi.stubEnv('LLM_MODEL', 'anthropic/claude-sonnet-5.5');
+    mockStatus.mockResolvedValue({ status: 'COMPLETED' });
+    mockResult.mockResolvedValue({ data: { output: '{"approved":true,"issues":[],"reason":"Conforme"}', usage: { cost: 0.003 } } });
+    const { readKeyframeQuality } = await import('./fal-keyframes');
+
+    await expect(readKeyframeQuality('vision-check-2', 'test-fal-key')).resolves.toMatchObject({
+      status: 'ready', costUsd: 0.003, quality: { approved: true, issues: [], reason: 'Conforme' },
+    });
+  });
+
+  it('keeps a bounded output excerpt in server diagnostics for invalid vision results', async () => {
+    vi.stubEnv('LLM_MODEL', 'anthropic/claude-sonnet-5.5');
+    mockStatus.mockResolvedValue({ status: 'COMPLETED' });
+    mockResult.mockResolvedValue({ data: { output: 'This is not the requested decision.' } });
+    const { readKeyframeQuality } = await import('./fal-keyframes');
+
+    await expect(readKeyframeQuality('vision-check-invalid', 'test-fal-key')).resolves.toMatchObject({
+      status: 'failed', error: expect.stringContaining('This is not the requested decision.'),
+    });
   });
 
   it('animates the generated image as the opening frame while preserving motion direction', () => {
