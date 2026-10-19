@@ -72,4 +72,16 @@ describe('fal Reference-to-Video adapters', () => {
     const { wanReferenceVideoProvider } = await import('./fal-reference-video');
     expect(await wanReferenceVideoProvider.status('request')).toEqual({ status: 'ready', videoUrl: 'https://v3.fal.media/result.mp4' });
   });
+
+  it('uses the endpoint persisted with an existing provider request for both status and result', async () => {
+    mockStatus.mockResolvedValue({ status: 'COMPLETED' });
+    mockResult.mockResolvedValue({ data: { video: { url: 'https://v3.fal.media/saved-endpoint.mp4' } }, requestId: 'request' });
+    const { klingReferenceVideoProvider } = await import('./fal-reference-video');
+    const savedEndpoint = 'fal-ai/kling-video/o3/pro/reference-to-video-v2';
+    await expect(klingReferenceVideoProvider.status('request', 'test-fal-key', savedEndpoint)).resolves.toEqual({
+      status: 'ready', videoUrl: 'https://v3.fal.media/saved-endpoint.mp4',
+    });
+    expect(mockStatus).toHaveBeenCalledWith(savedEndpoint, { requestId: 'request', logs: false });
+    expect(mockResult).toHaveBeenCalledWith(savedEndpoint, { requestId: 'request' });
+  });
 });

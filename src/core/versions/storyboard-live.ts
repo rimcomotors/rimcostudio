@@ -3,9 +3,9 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
-import { buildKeyframeAnimationPrompt, buildKeyframePrompt, canAnimateKeyframes, keyframeQualityAction, KEYFRAME_IMAGE_COST_USD, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, keyframeVideoProviders, readKeyframe, readKeyframeQuality, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
+import { buildKeyframeAnimationPrompt, buildKeyframePrompt, canAnimateKeyframes, keyframeQualityAction, KEYFRAME_IMAGE_COST_USD, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
-import { klingVideoProvider } from '@/core/providers/fal-kling';
+import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { keyframeImageUploadTarget } from '@/core/storage/keyframe-image';
 import { createSupabaseServerClient } from '@/core/supabase/server';
@@ -21,9 +21,39 @@ import { createFalClient } from '@fal-ai/client';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getActiveFalCredential, getFalCredentialById, pruneRetiredFalCredentials } from '@/core/providers/fal-credential-vault';
+import { falErrorStatusCode, isFalPollDue, planFalPollFailure } from '@/core/providers/fal-polling';
 
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+
+async function recordPollFailure(input: {
+  admin: ReturnType<typeof createStorageAdminClient>;
+  versionId: string;
+  shotNumber: number;
+  shot: Record<string, unknown>;
+  stage: 'keyframe' | 'quality' | 'video';
+  cause: unknown;
+  apiKey: string;
+  now: string;
+}) {
+  const plan = planFalPollFailure(input.cause, Number(input.shot.provider_poll_failure_count ?? 0), new Date(input.now));
+  const detail = safeProviderError(input.cause, input.apiKey);
+  const terminal = plan.action === 'fail';
+  const statusField = input.stage === 'video' ? 'status' : 'keyframe_status';
+  const update: Record<string, unknown> = {
+    provider_poll_failure_count: plan.failureCount,
+    provider_next_poll_at: plan.nextPollAt,
+    provider_last_poll_error: detail,
+    provider_reconciliation_required: terminal,
+    updated_at: input.now,
+    error_message: terminal ? `Le suivi fal a échoué (${falErrorStatusCode(input.cause) ?? 'réseau'}) : ${detail}` : null,
+  };
+  if (terminal) update[statusField] = 'failed';
+  const { error } = await input.admin.from('video_shots').update(update).eq('version_id', input.versionId).eq('shot_number', input.shotNumber);
+  if (error) throw new HttpError(503, 'Impossible d’enregistrer l’état du suivi fal.');
+  console.error('fal_poll_recovery', JSON.stringify({ versionId: input.versionId, shotNumber: input.shotNumber, stage: input.stage, action: plan.action, failureCount: plan.failureCount, statusCode: falErrorStatusCode(input.cause), detail }));
+  return plan;
+}
 
 const providers: Record<'wan' | 'kling' | 'seedance', ReferenceVideoProvider> = {
   wan: wanReferenceVideoProvider, kling: klingReferenceVideoProvider, seedance: seedanceReferenceVideoProvider,
@@ -177,6 +207,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const shotRows = generationShots.map((shot, index) => ({
     version_id: version.id, shot_number: index + 1, duration_seconds: shot.durationSeconds,
     title: shot.title, generated_prompt: prompts[index], usage_ledger_id: ledgerId, status: 'queued', keyframe_status: keyframeMode ? 'queued' : 'skipped',
+    provider_endpoint: keyframeMode ? animationEndpoint : route.endpoint,
     price_usd_per_second: Number(videoModel.price_usd_per_second), estimated_cost_usd: shot.durationSeconds * Number(videoModel.price_usd_per_second),
   }));
   const { error: shotsInsertError } = await admin.from('video_shots').insert(shotRows);
@@ -249,24 +280,30 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
       const result = keyframeSubmissions[index];
       if (result.status === 'fulfilled') {
         submittedKeyframes += 1;
-        const { error: updateError } = await admin.from('video_shots').update({ keyframe_request_id: result.value.requestId, keyframe_status: 'generating', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
+        const { error: updateError } = await admin.from('video_shots').update({ keyframe_request_id: result.value.requestId, keyframe_endpoint: KEYFRAME_IMAGE_ENDPOINT, keyframe_status: 'generating', provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
         if (updateError) {
+          const retryWrite = await admin.from('video_shots').update({ keyframe_request_id: result.value.requestId, keyframe_endpoint: KEYFRAME_IMAGE_ENDPOINT, keyframe_status: 'generating', provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
+          if (!retryWrite.error) continue;
           await Promise.all([
-            ...((keyframeLedgers.get(index + 1)?.imageIds ?? []).map((entryId) => settleUsageCost(admin, { entryId, outcome: 'charged', actualCostUsd: KEYFRAME_IMAGE_COST_USD, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }))),
             ...((keyframeLedgers.get(index + 1)?.qualityIds ?? []).map((entryId) => settleUsageCost(admin, { entryId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }))),
+            ...((keyframeLedgers.get(index + 1)?.imageIds.slice(1) ?? []).map((entryId) => settleUsageCost(admin, { entryId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }))),
           ]);
-          await admin.from('video_shots').update({ keyframe_status: 'failed', error_message: 'Le suivi de l’image-clé n’a pas pu être enregistré.' }).eq('version_id', version.id).eq('shot_number', index + 1);
+          await admin.from('video_shots').update({ keyframe_status: 'failed', provider_reconciliation_required: true, provider_last_poll_error: `request_id=${result.value.requestId}`, error_message: 'fal a accepté l’image-clé, mais son identifiant n’a pas pu être enregistré. Vérification manuelle nécessaire; aucun clip vidéo ne sera lancé.', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
         }
       } else {
         const ids = keyframeLedgers.get(index + 1);
-        await Promise.all((ids ? [...ids.imageIds, ...ids.qualityIds] : []).map((entryId) => settleUsageCost(admin, { entryId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false })));
-        await admin.from('video_shots').update({ keyframe_status: 'failed', error_message: 'L’image-clé de ce plan n’a pas pu démarrer.', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
+        const statusCode = falErrorStatusCode(result.reason);
+        const uncertain = statusCode === null || statusCode >= 500;
+        const releaseIds = ids ? (uncertain ? [...ids.qualityIds, ...ids.imageIds.slice(1), ...ids.qualityIds.slice(1)] : [...ids.imageIds, ...ids.qualityIds]) : [];
+        await Promise.all(releaseIds.map((entryId) => settleUsageCost(admin, { entryId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false })));
+        await admin.from('video_shots').update({ keyframe_status: 'failed', provider_reconciliation_required: uncertain, provider_last_poll_error: safeProviderError(result.reason, falCredential.apiKey), error_message: uncertain ? 'fal n’a pas confirmé si la création de cette image-clé a été acceptée. La réservation reste à réconcilier.' : `fal a refusé la création de cette image-clé (${statusCode}) : ${safeProviderError(result.reason, falCredential.apiKey)}`, updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
       }
     }
     if (!submittedKeyframes) {
+      const { data: uncertainShots } = await admin.from('video_shots').select('shot_number').eq('version_id', version.id).eq('provider_reconciliation_required', true);
       await Promise.all([
-        settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
-        admin.from('video_versions').update({ status: 'failed', error_message: 'Aucune image-clé n’a pu démarrer. Aucun plan vidéo n’a été envoyé.' }).eq('id', version.id),
+        ...(uncertainShots?.length ? [] : [settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA })]),
+        admin.from('video_versions').update({ status: 'failed', error_message: uncertainShots?.length ? 'Le lancement fal reste à réconcilier. Aucun plan vidéo ne sera envoyé avant vérification.' : 'Aucune image-clé n’a pu démarrer. Aucun plan vidéo n’a été envoyé.' }).eq('id', version.id),
         admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
       ]);
       throw new HttpError(503, 'Aucune image-clé n’a pu démarrer. Réessayez plus tard.');
@@ -306,17 +343,25 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     const submission = submissions[index];
     if (submission.status === 'fulfilled') {
       submitted += 1;
-      await admin.from('video_shots').update({ provider_request_id: submission.value.requestId, status: 'generating', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
+      const submissionPatch = { provider_request_id: submission.value.requestId, provider_endpoint: provider.endpoint, status: 'generating', provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, updated_at: new Date().toISOString() };
+      const firstWrite = await admin.from('video_shots').update(submissionPatch).eq('version_id', version.id).eq('shot_number', index + 1);
+      if (firstWrite.error) {
+        const recoveredWrite = await admin.from('video_shots').update(submissionPatch).eq('version_id', version.id).eq('shot_number', index + 1);
+        if (recoveredWrite.error) await admin.from('video_shots').update({ status: 'failed', provider_reconciliation_required: true, provider_last_poll_error: `request_id=${submission.value.requestId}`, error_message: 'fal a accepté la séquence, mais son identifiant n’a pas pu être enregistré. Vérification manuelle nécessaire.', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
+      }
     } else {
       const providerError = safeProviderError(submission.reason, falCredential.apiKey);
-      console.error('[video-generation] Séquence non démarrée.', { versionId: version.id, shotNumber: index + 1, detail: providerError });
-      await admin.from('video_shots').update({ status: 'failed', error_message: 'Cette séquence n’a pas pu démarrer.', updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
+      const statusCode = falErrorStatusCode(submission.reason);
+      const uncertain = statusCode === null || statusCode >= 500;
+      console.error('[video-generation] Séquence non démarrée.', { versionId: version.id, shotNumber: index + 1, statusCode, detail: providerError });
+      await admin.from('video_shots').update({ status: 'failed', provider_reconciliation_required: uncertain, provider_last_poll_error: providerError, error_message: uncertain ? 'fal n’a pas confirmé si la séquence a été acceptée. La réservation reste à réconcilier.' : `fal a refusé la séquence (${statusCode}) : ${providerError}`, updated_at: new Date().toISOString() }).eq('version_id', version.id).eq('shot_number', index + 1);
     }
   }
   if (!submitted) {
+    const { data: uncertainShots } = await admin.from('video_shots').select('shot_number').eq('version_id', version.id).eq('provider_reconciliation_required', true);
     await Promise.all([
-      settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA }),
-      admin.from('video_versions').update({ status: 'failed', error_message: 'Aucun plan n’a pu démarrer. La réservation a été libérée.' }).eq('id', version.id),
+      ...(uncertainShots?.length ? [] : [settleUsageCost(admin, { entryId: ledgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA })]),
+      admin.from('video_versions').update({ status: 'failed', error_message: uncertainShots?.length ? 'Le lancement fal reste à réconcilier. La réservation n’a pas été libérée.' : 'Aucun plan n’a pu démarrer. La réservation a été libérée.' }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed' }).eq('id', video.id),
     ]);
     throw new HttpError(503, 'Aucun plan n’a pu démarrer. La réservation a été libérée. Réessayez plus tard.');
@@ -366,6 +411,8 @@ async function refreshKeyframes(input: {
     const imageLedgerIds = Array.isArray(shot.keyframe_image_ledger_ids) ? shot.keyframe_image_ledger_ids as string[] : [];
     const qualityLedgerIds = Array.isArray(shot.keyframe_quality_ledger_ids) ? shot.keyframe_quality_ledger_ids as string[] : [];
     const attempt = Number(shot.keyframe_retry_count ?? 0);
+    const activeKeyframePoll = ['generating', 'checking'].includes(String(shot.keyframe_status));
+    if (activeKeyframePoll && (!isFalPollDue(shot.provider_next_poll_at) || Number(shot.provider_poll_failure_count ?? 0) >= 4)) return;
     if (!draft || imageLedgerIds.length !== 2 || qualityLedgerIds.length !== 2) throw new HttpError(503, `Le suivi de l’image-clé ${shotNumber} est incomplet.`);
     const vehicle = assetsById.get(draft.vehiclePhotoId);
     const placePath = draft.locationPhotoId ? locationPaths.get(draft.locationPhotoId) ?? assetsById.get(draft.locationPhotoId)?.path : undefined;
@@ -374,11 +421,18 @@ async function refreshKeyframes(input: {
     const imageLedgerId = imageLedgerIds[attempt];
     const qualityLedgerId = qualityLedgerIds[attempt];
     if (shot.keyframe_status === 'generating' && typeof shot.keyframe_request_id === 'string') {
-      const state = await readKeyframe(shot.keyframe_request_id, apiKey);
+      let state;
+      try {
+        state = await readKeyframe(shot.keyframe_request_id, apiKey, String(shot.keyframe_endpoint || KEYFRAME_IMAGE_ENDPOINT));
+      } catch (cause) {
+        await recordPollFailure({ admin, versionId: version.id, shotNumber, shot, stage: 'keyframe', cause, apiKey, now });
+        return;
+      }
+      if (Number(shot.provider_poll_failure_count ?? 0) > 0) {
+        await admin.from('video_shots').update({ provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null }).eq('version_id', version.id).eq('shot_number', shotNumber);
+      }
       if (state.status === 'failed') {
-        await settleUsageCost(admin, { entryId: imageLedgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
-        await settleUsageCost(admin, { entryId: qualityLedgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
-        await admin.from('video_shots').update({ keyframe_status: 'failed', error_message: 'Le fournisseur n’a pas pu créer cette image-clé.', updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+        await admin.from('video_shots').update({ keyframe_status: 'failed', provider_reconciliation_required: true, provider_next_poll_at: null, provider_last_poll_error: 'fal a déclaré la tâche image en échec', error_message: 'fal a déclaré la création de cette image-clé en échec. Son coût reste à réconcilier.', updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
         return;
       }
       if (state.status === 'generating') return;
@@ -407,16 +461,46 @@ async function refreshKeyframes(input: {
       const { data: signed, error: signedError } = await admin.storage.from(target.bucket).createSignedUrl(target.path, 3600);
       if (signedError || !signed?.signedUrl) throw new HttpError(503, 'Impossible de créer le lien de contrôle temporaire.');
       const visionPrompt = `Compare les images reçues dans cet ordre : image 1 = candidat image-clé, image 2 = véhicule approuvé, image 3 éventuelle = lieu sélectionné. Le candidat doit conserver strictement le véhicule et sa couleur visibles dans la référence; respecter le lieu et la composition demandés; ne contenir aucun texte ajouté, logo inventé ni plaque lisible. Vérifie aussi une lumière et une échelle plausibles. Réponds avec approved=true seulement si aucun défaut manifeste. Sinon liste précisément les défauts. Plan: ${draft.title}; scène: ${draft.scene}; cadrage: ${draft.framing}; lieu: ${draft.location}.`;
-      const qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signed.signedUrl, ...referenceUrls] }, apiKey);
-      const { error: updateError } = await admin.from('video_shots').update({ keyframe_status: 'checking', keyframe_path: target.path, keyframe_quality_request_id: qualityJob.requestId, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+      let qualityJob: { requestId: string };
+      try {
+        qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signed.signedUrl, ...referenceUrls] }, apiKey);
+      } catch (cause) {
+        const statusCode = falErrorStatusCode(cause);
+        const uncertain = statusCode === null || statusCode >= 500;
+        if (!uncertain) await settleUsageCost(admin, { entryId: qualityLedgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
+        await admin.from('video_shots').update({
+          keyframe_status: 'failed',
+          provider_reconciliation_required: uncertain,
+          provider_next_poll_at: null,
+          provider_last_poll_error: safeProviderError(cause, apiKey),
+          error_message: uncertain
+            ? 'Le contrôle fal n’a pas confirmé si la demande a été acceptée. La réservation est conservée pour réconciliation avant toute relance.'
+            : `fal a refusé le contrôle visuel (${statusCode}) : ${safeProviderError(cause, apiKey)}`,
+          updated_at: now,
+        }).eq('version_id', version.id).eq('shot_number', shotNumber);
+        return;
+      }
+      const qualityJobPatch = { keyframe_status: 'checking', keyframe_path: target.path, keyframe_quality_request_id: qualityJob.requestId, keyframe_quality_endpoint: KEYFRAME_VISION_ENDPOINT, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, updated_at: now };
+      const { error: updateError } = await admin.from('video_shots').update(qualityJobPatch).eq('version_id', version.id).eq('shot_number', shotNumber);
       if (updateError) {
-        await settleUsageCost(admin, { entryId: qualityLedgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
-        throw new HttpError(503, `Impossible d’enregistrer le contrôle de l’image-clé ${shotNumber}.`);
+        const recoveredWrite = await admin.from('video_shots').update(qualityJobPatch).eq('version_id', version.id).eq('shot_number', shotNumber);
+        if (recoveredWrite.error) {
+          await admin.from('video_shots').update({ keyframe_status: 'failed', provider_reconciliation_required: true, provider_last_poll_error: `request_id=${qualityJob.requestId}`, error_message: 'fal a accepté le contrôle de l’image-clé, mais son identifiant n’a pas pu être enregistré. Vérification manuelle nécessaire.', updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+        }
       }
       return;
     }
     if (shot.keyframe_status !== 'checking' || typeof shot.keyframe_quality_request_id !== 'string') return;
-    const state = await readKeyframeQuality(shot.keyframe_quality_request_id, apiKey);
+    let state;
+    try {
+      state = await readKeyframeQuality(shot.keyframe_quality_request_id, apiKey, String(shot.keyframe_quality_endpoint || KEYFRAME_VISION_ENDPOINT));
+    } catch (cause) {
+      await recordPollFailure({ admin, versionId: version.id, shotNumber, shot, stage: 'quality', cause, apiKey, now });
+      return;
+    }
+    if (Number(shot.provider_poll_failure_count ?? 0) > 0) {
+      await admin.from('video_shots').update({ provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null }).eq('version_id', version.id).eq('shot_number', shotNumber);
+    }
     if (state.status === 'checking') return;
     if (state.status === 'failed' || !state.quality) {
       if (state.error) console.error('keyframe_quality_failed', JSON.stringify({
@@ -425,15 +509,8 @@ async function refreshKeyframes(input: {
         requestId: shot.keyframe_quality_request_id,
         reason: state.error,
       }));
-      await settleUsageCost(admin, {
-        entryId: qualityLedgerId,
-        outcome: state.costUsd === null ? 'released' : 'charged',
-        actualCostUsd: state.costUsd ?? 0,
-        usdToEur: env.USD_TO_EUR_RATE,
-        eurToFcfa: env.EUR_TO_FCFA,
-        billable: false,
-      });
-      await admin.from('video_shots').update({ keyframe_status: 'failed', error_message: 'Le contrôle automatique de cette image-clé n’a pas abouti.', updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+      if (state.costUsd !== null) await settleUsageCost(admin, { entryId: qualityLedgerId, outcome: 'charged', actualCostUsd: state.costUsd, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
+      await admin.from('video_shots').update({ keyframe_status: 'failed', provider_reconciliation_required: true, provider_next_poll_at: null, provider_last_poll_error: state.error ?? 'réponse de contrôle invalide', error_message: `Le contrôle automatique a échoué. La réservation reste à réconcilier.${state.error ? ` Détail : ${safeProviderError(state.error, apiKey)}` : ''}`, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
       return;
     }
     const quality = state.quality;
@@ -447,21 +524,34 @@ async function refreshKeyframes(input: {
           settleUsageCost(admin, { entryId: qualityLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }),
         ]);
       }
-      await admin.from('video_shots').update({ keyframe_status: 'ready', keyframe_quality: quality, error_message: null, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+      await admin.from('video_shots').update({ keyframe_status: 'ready', keyframe_quality: quality, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, error_message: null, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
       return;
     }
     if (qualityAction === 'retry') {
       const vehicleDescription = String(brief.vehicle_description ?? 'Véhicule fidèle à la photo validée');
       const prompt = buildKeyframePrompt({ shot: draft, vehicle: vehicleDescription, lighting: String(brief.lighting ?? ''), format: String(brief.format ?? '16:9'), retryReason: quality.issues.join('; ') || quality.reason });
+      let retryRequestId: string | null = null;
       try {
         const retryJob = await submitKeyframe({ prompt, imageUrls: referenceUrls, aspectRatio: String(brief.format ?? '16:9') }, apiKey);
-        const { error: updateError } = await admin.from('video_shots').update({ keyframe_status: 'generating', keyframe_request_id: retryJob.requestId, keyframe_quality_request_id: null, keyframe_path: null, keyframe_quality: quality, keyframe_retry_count: 1, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+        retryRequestId = retryJob.requestId;
+        const { error: updateError } = await admin.from('video_shots').update({ keyframe_status: 'generating', keyframe_request_id: retryJob.requestId, keyframe_endpoint: KEYFRAME_IMAGE_ENDPOINT, keyframe_quality_request_id: null, keyframe_quality_endpoint: null, keyframe_path: null, keyframe_quality: quality, keyframe_retry_count: 1, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
         if (updateError) throw new HttpError(503, 'Impossible d’enregistrer la reprise de l’image-clé.');
-      } catch {
+      } catch (cause) {
+        if (retryRequestId) {
+          const recoveredWrite = await admin.from('video_shots').update({ keyframe_status: 'generating', keyframe_request_id: retryRequestId, keyframe_endpoint: KEYFRAME_IMAGE_ENDPOINT, keyframe_quality_request_id: null, keyframe_quality_endpoint: null, keyframe_path: null, keyframe_quality: quality, keyframe_retry_count: 1, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
+          if (!recoveredWrite.error) return;
+          await Promise.all([
+            settleUsageCost(admin, { entryId: qualityLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }),
+            admin.from('video_shots').update({ keyframe_status: 'failed', provider_reconciliation_required: true, provider_last_poll_error: `request_id=${retryRequestId}`, error_message: 'fal a accepté la reprise de l’image-clé, mais son identifiant n’a pas pu être enregistré. Vérification manuelle nécessaire.', updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber),
+          ]);
+          return;
+        }
+        const statusCode = falErrorStatusCode(cause);
+        const uncertain = statusCode === null || statusCode >= 500;
         await Promise.all([
-          settleUsageCost(admin, { entryId: imageLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }),
+          ...(uncertain ? [] : [settleUsageCost(admin, { entryId: imageLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false })]),
           settleUsageCost(admin, { entryId: qualityLedgerIds[1], outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false }),
-          admin.from('video_shots').update({ keyframe_status: 'failed', keyframe_quality: quality, error_message: 'La reprise de cette image-clé n’a pas pu démarrer.' }).eq('version_id', version.id).eq('shot_number', shotNumber),
+          admin.from('video_shots').update({ keyframe_status: 'failed', provider_reconciliation_required: uncertain, provider_last_poll_error: safeProviderError(cause, apiKey), keyframe_quality: quality, error_message: uncertain ? 'fal n’a pas confirmé si la reprise de l’image-clé a été acceptée. La réservation est conservée pour réconciliation.' : `fal a refusé la reprise de l’image-clé (${statusCode}) : ${safeProviderError(cause, apiKey)}`, updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber),
         ]);
       }
       return;
@@ -472,7 +562,7 @@ async function refreshKeyframes(input: {
   if (failure) throw failure.reason;
 
   const { data: refreshedShots, error: refreshedError } = await admin.from('video_shots')
-    .select('shot_number,duration_seconds,title,generated_prompt,provider_request_id,status,raw_path,error_message,keyframe_status,keyframe_request_id,keyframe_quality_request_id,keyframe_path,keyframe_retry_count,keyframe_quality,keyframe_image_ledger_ids,keyframe_quality_ledger_ids')
+    .select('shot_number,duration_seconds,title,generated_prompt,provider_request_id,status,raw_path,error_message,keyframe_status,keyframe_request_id,keyframe_quality_request_id,keyframe_path,keyframe_retry_count,keyframe_quality,keyframe_image_ledger_ids,keyframe_quality_ledger_ids,provider_poll_failure_count,provider_next_poll_at,provider_reconciliation_required')
     .eq('version_id', version.id).order('shot_number');
   if (refreshedError || !refreshedShots) throw new HttpError(503, 'Impossible de relire la progression des images-clés.');
   const completedKeyframes = refreshedShots.filter((shot) => shot.keyframe_status === 'ready').length;
@@ -487,8 +577,11 @@ async function refreshKeyframes(input: {
     const { data: generationLedger } = await admin.from('usage_ledger').select('id').eq('version_id', version.id).eq('kind', 'generation').eq('ai_model_id', version.ai_model_id).eq('status', 'reserved').maybeSingle();
     if (generationLedger?.id) await settleUsageCost(admin, { entryId: generationLedger.id, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA });
     const error = refreshedShots.find((shot) => shot.keyframe_status === 'failed')?.error_message ?? 'Une image-clé n’a pas passé le contrôle. Aucun plan vidéo n’a été envoyé.';
+    const unusedRetryReservations = refreshedShots.flatMap((shot) => Number(shot.keyframe_retry_count ?? 0) === 0
+      ? [...(Array.isArray(shot.keyframe_image_ledger_ids) ? shot.keyframe_image_ledger_ids.slice(1) : []), ...(Array.isArray(shot.keyframe_quality_ledger_ids) ? shot.keyframe_quality_ledger_ids.slice(1) : [])]
+      : []);
     await Promise.all([
-      admin.from('usage_ledger').update({ status: 'released' }).eq('version_id', version.id).eq('kind', 'keyframe').eq('status', 'reserved'),
+      ...unusedRetryReservations.map((entryId) => settleUsageCost(admin, { entryId: String(entryId), outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false })),
       admin.from('video_versions').update({ status: 'failed', error_message: error, updated_at: now }).eq('id', version.id),
       admin.from('videos').update({ status: 'failed', updated_at: now }).eq('id', version.video_id),
     ]);
@@ -507,12 +600,25 @@ async function refreshKeyframes(input: {
       durationS: Number(shot.duration_seconds), mood: String(brief.mood ?? ''), lighting: String(brief.lighting ?? ''),
     });
     const job = await provider.submit({ prompt, referenceImageUrls: [signed.signedUrl], durationS: Number(shot.duration_seconds), aspectRatio: String(brief.format ?? '16:9'), endUserId: String(video.user_id) }, apiKey);
-    const { error: updateError } = await admin.from('video_shots').update({ provider_request_id: job.requestId, status: 'generating', generated_prompt: prompt, updated_at: now }).eq('version_id', version.id).eq('shot_number', shot.shot_number);
-    if (updateError) throw new HttpError(503, 'Impossible d’enregistrer le lancement de l’animation.');
+    const animationPatch = { provider_request_id: job.requestId, provider_endpoint: provider.endpoint, status: 'generating', generated_prompt: prompt, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, updated_at: now };
+    const firstWrite = await admin.from('video_shots').update(animationPatch).eq('version_id', version.id).eq('shot_number', shot.shot_number);
+    if (firstWrite.error) {
+      const recoveredWrite = await admin.from('video_shots').update(animationPatch).eq('version_id', version.id).eq('shot_number', shot.shot_number);
+      if (recoveredWrite.error) await admin.from('video_shots').update({ status: 'failed', provider_reconciliation_required: true, provider_last_poll_error: `request_id=${job.requestId}`, error_message: 'fal a accepté l’animation, mais son identifiant n’a pas pu être enregistré. Vérification manuelle nécessaire.', updated_at: now }).eq('version_id', version.id).eq('shot_number', shot.shot_number);
+    }
   }));
   for (let index = 0; index < animationJobs.length; index += 1) {
     const result = animationJobs[index];
-    if (result.status === 'rejected') await admin.from('video_shots').update({ status: 'failed', error_message: 'L’animation de ce plan n’a pas pu démarrer.', updated_at: now }).eq('version_id', version.id).eq('shot_number', Number(refreshedShots[index].shot_number));
+    if (result.status === 'rejected') {
+      const statusCode = falErrorStatusCode(result.reason);
+      const uncertain = statusCode === null || statusCode >= 500;
+      await admin.from('video_shots').update({
+        status: 'failed', provider_reconciliation_required: uncertain,
+        provider_last_poll_error: safeProviderError(result.reason, apiKey), provider_next_poll_at: null,
+        error_message: uncertain ? 'fal n’a pas confirmé si l’animation a été acceptée. Le coût reste réservé pour réconciliation.' : `fal a refusé l’animation (${statusCode}) : ${safeProviderError(result.reason, apiKey)}`,
+        updated_at: now,
+      }).eq('version_id', version.id).eq('shot_number', Number(refreshedShots[index].shot_number));
+    }
   }
   const metrics = brief.processingMetrics && typeof brief.processingMetrics === 'object' ? brief.processingMetrics as ProcessingMetrics : {};
   const keyframeCompletedAt = new Date().toISOString();
@@ -542,7 +648,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   }
 
   const { data: shots, error: shotsError } = await admin.from('video_shots')
-    .select('shot_number,duration_seconds,title,generated_prompt,provider_request_id,status,raw_path,error_message,updated_at,keyframe_status,keyframe_request_id,keyframe_quality_request_id,keyframe_path,keyframe_retry_count,keyframe_quality,keyframe_image_ledger_ids,keyframe_quality_ledger_ids')
+    .select('shot_number,duration_seconds,title,generated_prompt,provider_request_id,provider_endpoint,status,raw_path,error_message,updated_at,keyframe_status,keyframe_request_id,keyframe_endpoint,keyframe_quality_request_id,keyframe_quality_endpoint,keyframe_path,keyframe_retry_count,keyframe_quality,keyframe_image_ledger_ids,keyframe_quality_ledger_ids,provider_poll_failure_count,provider_next_poll_at,provider_last_poll_error,provider_reconciliation_required')
     .eq('version_id', versionId).order('shot_number');
   const briefData = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
   const singleStoryboardMode = briefData.singleStoryboardMode === true;
@@ -566,18 +672,24 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
     if (keyframeResult) return keyframeResult;
   }
   const statusProvider = keyframeMode ? keyframeVideoProviders[adapterFamily] : multiClip || singleStoryboardMode ? providers[adapterFamily] : klingVideoProvider;
+  const statusEndpoint = 'endpoint' in statusProvider ? statusProvider.endpoint : KLING_ENDPOINT;
 
-  const shotRefreshResults = await Promise.allSettled(shots.filter((shot) => shot.status === 'generating' && shot.provider_request_id).map(async (shot) => {
+  const shotRefreshResults = await Promise.allSettled(shots.filter((shot) => shot.status === 'generating' && shot.provider_request_id
+    && Number(shot.provider_poll_failure_count ?? 0) < 4 && isFalPollDue(shot.provider_next_poll_at)).map(async (shot) => {
     let state;
     try {
-      state = await statusProvider.status(shot.provider_request_id, falCredential.apiKey);
+      state = await statusProvider.status(shot.provider_request_id, falCredential.apiKey, String(shot.provider_endpoint || statusEndpoint));
     } catch (cause) {
-      logFalStatusFailure({ stage: 'storyboard_shot_status', versionId, shotNumber: shot.shot_number, providerRequestId: shot.provider_request_id, endpoint: model?.fal_endpoint_id ?? 'unknown', adapterFamily, cause, apiKey: falCredential.apiKey });
-      throw new HttpError(502, `Le suivi du plan ${shot.shot_number} a échoué. Réessayez dans un instant.`);
+      logFalStatusFailure({ stage: 'storyboard_shot_status', versionId, shotNumber: shot.shot_number, providerRequestId: shot.provider_request_id, endpoint: String(shot.provider_endpoint || statusEndpoint), adapterFamily, cause, apiKey: falCredential.apiKey });
+      await recordPollFailure({ admin, versionId, shotNumber: Number(shot.shot_number), shot, stage: 'video', cause, apiKey: falCredential.apiKey, now: new Date().toISOString() });
+      return;
+    }
+    if (Number(shot.provider_poll_failure_count ?? 0) > 0) {
+      await admin.from('video_shots').update({ provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null }).eq('version_id', versionId).eq('shot_number', shot.shot_number);
     }
     if (state.status === 'failed') {
       nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'failedAt', observedAt);
-      await admin.from('video_shots').update({ status: 'failed', error_message: state.error ?? 'La génération fal a échoué.', updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shot.shot_number).eq('status', 'generating');
+      await admin.from('video_shots').update({ status: 'failed', provider_reconciliation_required: true, provider_next_poll_at: null, provider_last_poll_error: state.error ?? 'fal task failed', error_message: `${state.error ?? 'La génération fal a échoué.'} Son coût reste à réconcilier.`, updated_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shot.shot_number).eq('status', 'generating');
       return;
     }
     if (state.status === 'queued') nextShotMetrics[String(shot.shot_number)] = firstObservedAt(nextShotMetrics[String(shot.shot_number)] ?? {}, 'providerQueuedAt', observedAt);
@@ -614,9 +726,11 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
   const refreshFailure = shotRefreshResults.find((result): result is PromiseRejectedResult => result.status === 'rejected');
   if (refreshFailure) throw refreshFailure.reason;
 
-  const { data: latestShots, error: latestError } = await admin.from('video_shots').select('status,raw_path,duration_seconds').eq('version_id', versionId).order('shot_number');
+  const { data: latestShots, error: latestError } = await admin.from('video_shots').select('status,raw_path,duration_seconds,provider_reconciliation_required,provider_poll_failure_count').eq('version_id', versionId).order('shot_number');
   if (latestError || !latestShots) throw new HttpError(503, 'Impossible de relire l’état des plans.');
   const completedShots = latestShots.filter((shot) => shot.status === 'ready' && shot.raw_path).length;
+  const reconciliationRequired = latestShots.some((shot) => shot.provider_reconciliation_required);
+  if (reconciliationRequired) return { id: versionId, status: 'generating' as const, reconciliationRequired: true, error: 'Une tâche fal doit être réconciliée avec son identifiant fournisseur avant la clôture des coûts.', completedShots, totalShots: latestShots.length };
   const pendingShots = latestShots.some((shot) => ['queued','generating','postprocessing'].includes(shot.status));
   if (pendingShots) return { id: versionId, status: 'generating' as const, completedShots, totalShots: latestShots.length };
 

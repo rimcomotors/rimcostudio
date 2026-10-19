@@ -29,12 +29,13 @@ export const klingVideoProvider: VideoProvider = {
     } });
     return { requestId: result.request_id };
   },
-  async status(requestId, apiKey) {
+  async status(requestId, apiKey, endpointOverride) {
     const fal = client(apiKey);
-    const result = await fal.queue.status(KLING_ENDPOINT, { requestId, logs: false });
+    const endpoint = endpointOverride ?? KLING_ENDPOINT;
+    const result = await fal.queue.status(endpoint, { requestId, logs: false });
     const status = normalizeStatus(result.status);
     if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération vidéo a échoué.' } : {}) };
-    const completed = await fal.queue.result(KLING_ENDPOINT, { requestId });
+    const completed = await fal.queue.result(endpoint, { requestId });
     // @fal-ai/client wraps queue results as { data, requestId }.
     const video = (completed as { data?: { video?: { url?: string } } }).data?.video;
     if (!video?.url) return { status: 'failed', error: 'La réponse de génération ne contient pas de vidéo.' };

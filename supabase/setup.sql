@@ -783,3 +783,27 @@ update public.ai_models set
   allowed_formats='{16:9,9:16,1:1}', pricing_verified_at=now()
 where fal_endpoint_id='alibaba/wan-3.0/image-to-video';
 notify pgrst, 'reload schema';
+
+-- 0026_allow_keyframe_images_in_video_storage.sql
+update storage.buckets
+set allowed_mime_types = (
+  select array_agg(distinct mime_type order by mime_type)
+  from unnest(coalesce(allowed_mime_types, array[]::text[]) || array['image/jpeg','image/png','image/webp']::text[]) as mime_type
+)
+where id = 'videos';
+
+-- 0027_fal_poll_recovery.sql
+alter table public.video_shots add column if not exists provider_endpoint text;
+alter table public.video_shots add column if not exists keyframe_endpoint text;
+alter table public.video_shots add column if not exists keyframe_quality_endpoint text;
+alter table public.video_shots add column if not exists provider_poll_failure_count integer not null default 0;
+alter table public.video_shots add column if not exists provider_next_poll_at timestamptz;
+alter table public.video_shots add column if not exists provider_last_poll_error text;
+alter table public.video_shots add column if not exists provider_reconciliation_required boolean not null default false;
+alter table public.video_shots drop constraint if exists video_shots_provider_poll_failure_count_check;
+alter table public.video_shots add constraint video_shots_provider_poll_failure_count_check
+  check (provider_poll_failure_count between 0 and 4);
+create index if not exists video_shots_provider_poll_due_idx
+  on public.video_shots(provider_next_poll_at)
+  where status = 'generating' or keyframe_status in ('generating','checking');
+notify pgrst, 'reload schema';

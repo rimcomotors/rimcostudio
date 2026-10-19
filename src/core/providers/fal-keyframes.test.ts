@@ -60,7 +60,7 @@ describe('fal keyframe helpers', () => {
     expect(parseKeyframeQuality('{"approved":true,"reason":"Conforme"}')).toBeNull();
   });
 
-  it('enables required reasoning for fal vision and extracts the strict JSON decision', async () => {
+  it('uses the documented fal vision input without forcing reasoning output', async () => {
     vi.stubEnv('LLM_MODEL', 'anthropic/claude-sonnet-5.5');
     mockSubmit.mockResolvedValue({ request_id: 'vision-check-1' });
     const { submitKeyframeQuality, KEYFRAME_VISION_ENDPOINT } = await import('./fal-keyframes');
@@ -69,11 +69,19 @@ describe('fal keyframe helpers', () => {
 
     expect(mockSubmit).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { input: expect.objectContaining({
       model: 'anthropic/claude-sonnet-5.5',
-      reasoning: true,
       max_tokens: 1500,
       system_prompt: expect.stringContaining('objet JSON compact'),
       image_urls: ['https://assets.example/keyframe.png'],
     }) });
+    expect(mockSubmit.mock.calls[0][1].input).not.toHaveProperty('reasoning');
+  });
+
+  it('polls a saved fal endpoint instead of silently switching to the current default', async () => {
+    mockStatus.mockResolvedValue({ status: 'IN_PROGRESS' });
+    const { readKeyframe, KEYFRAME_IMAGE_ENDPOINT } = await import('./fal-keyframes');
+    await readKeyframe('saved-request', 'test-fal-key', 'fal-ai/nano-banana-2/edit-v2');
+    expect(mockStatus).toHaveBeenCalledWith('fal-ai/nano-banana-2/edit-v2', { requestId: 'saved-request', logs: false });
+    expect(KEYFRAME_IMAGE_ENDPOINT).not.toBe('fal-ai/nano-banana-2/edit-v2');
   });
 
   it('requests fal diagnostics when the vision queue fails', async () => {

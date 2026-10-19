@@ -21,7 +21,7 @@ export type ReferenceVideoProvider = {
   minDurationS: number;
   maxDurationS: number;
   submit(input: ReferenceVideoInput, apiKey?: string): Promise<{ requestId: string }>;
-  status(requestId: string, apiKey?: string): Promise<{ status: ProviderStatus; videoUrl?: string; error?: string }>;
+  status(requestId: string, apiKey?: string, endpointOverride?: string): Promise<{ status: ProviderStatus; videoUrl?: string; error?: string }>;
 };
 
 /** Keep actionable provider errors while removing URLs and credential-like values. */
@@ -70,12 +70,13 @@ function promptWithImageReferences(prompt: string, count: number, marker: '@' | 
 }
 
 function createStatusReader(endpoint: string): ReferenceVideoProvider['status'] {
-  return async (requestId, apiKey) => {
+  return async (requestId, apiKey, endpointOverride) => {
     const fal = client(apiKey);
-    const result = await fal.queue.status(endpoint, { requestId, logs: false });
+    const activeEndpoint = endpointOverride ?? endpoint;
+    const result = await fal.queue.status(activeEndpoint, { requestId, logs: false });
     const status = normalizeStatus(result.status);
     if (status !== 'ready') return { status, ...(status === 'failed' ? { error: 'La génération vidéo a échoué.' } : {}) };
-    const completed = await fal.queue.result(endpoint, { requestId });
+    const completed = await fal.queue.result(activeEndpoint, { requestId });
     const video = (completed as { data?: { video?: { url?: string } } }).data?.video;
     if (!video?.url) return { status: 'failed', error: 'La réponse de génération ne contient pas de vidéo.' };
     return { status: 'ready', videoUrl: video.url };
