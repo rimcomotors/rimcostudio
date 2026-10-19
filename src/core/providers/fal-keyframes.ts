@@ -53,10 +53,43 @@ export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehi
 
 export function parseKeyframeQuality(text: string): KeyframeQuality | null {
   const normalized = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  try {
-    const result = qualitySchema.safeParse(JSON.parse(normalized) as unknown);
-    return result.success ? result.data : null;
-  } catch { return null; }
+  const candidates = [normalized, ...jsonObjectCandidates(normalized)];
+  for (const candidate of candidates) {
+    try {
+      const result = qualitySchema.safeParse(JSON.parse(candidate) as unknown);
+      if (result.success) return result.data;
+    } catch { /* Continue past prose or non-JSON objects in model reasoning. */ }
+  }
+  return null;
+}
+
+function jsonObjectCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  for (let start = 0; start < text.length; start += 1) {
+    if (text[start] !== '{') continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const char = text[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') inString = false;
+        continue;
+      }
+      if (char === '"') inString = true;
+      else if (char === '{') depth += 1;
+      else if (char === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          candidates.push(text.slice(start, index + 1));
+          break;
+        }
+      }
+    }
+  }
+  return candidates;
 }
 
 function fal(apiKey: string) {
@@ -97,9 +130,14 @@ export async function submitKeyframeQuality(input: { prompt: string; imageUrls: 
 
 export async function readKeyframeQuality(requestId: string, apiKey: string) {
   const client = fal(apiKey);
-  const status = await client.queue.status(KEYFRAME_VISION_ENDPOINT, { requestId, logs: false });
+  const status = await client.queue.status(KEYFRAME_VISION_ENDPOINT, { requestId, logs: true });
   const statusValue = String(status.status);
-  if (statusValue === 'FAILED') return { status: 'failed' as const, costUsd: null, quality: null };
+  if (statusValue === 'FAILED') {
+    const logs = (status as { logs?: Array<{ message?: unknown }> }).logs;
+    const error = logs?.map((entry) => typeof entry.message === 'string' ? entry.message.trim() : '')
+      .filter(Boolean).join(' ').slice(0, 500) || 'Le fournisseur de contrôle visuel a échoué sans détail.';
+    return { status: 'failed' as const, costUsd: null, quality: null, error };
+  }
   if (statusValue !== 'COMPLETED') return { status: 'checking' as const, costUsd: null, quality: null };
   const result = await client.queue.result(KEYFRAME_VISION_ENDPOINT, { requestId });
   const data = (result as { data?: { output?: unknown; usage?: { cost?: unknown } } }).data;
@@ -107,7 +145,9 @@ export async function readKeyframeQuality(requestId: string, apiKey: string) {
   const usageCost = data?.usage?.cost;
   const costUsd = typeof usageCost === 'number' && Number.isFinite(usageCost) && usageCost >= 0 ? usageCost : null;
   const quality = parseKeyframeQuality(output);
-  return { status: quality ? 'ready' as const : 'failed' as const, costUsd, quality };
+  return quality
+    ? { status: 'ready' as const, costUsd, quality }
+    : { status: 'failed' as const, costUsd, quality: null, error: 'La réponse du modèle de contrôle ne contient pas le JSON attendu.' };
 }
 
 function createKeyframeVideoProvider(family: 'wan' | 'kling' | 'seedance'): ReferenceVideoProvider {

@@ -419,7 +419,20 @@ async function refreshKeyframes(input: {
     const state = await readKeyframeQuality(shot.keyframe_quality_request_id, apiKey);
     if (state.status === 'checking') return;
     if (state.status === 'failed' || !state.quality) {
-      await settleUsageCost(admin, { entryId: qualityLedgerId, outcome: 'released', actualCostUsd: 0, usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA, billable: false });
+      if (state.error) console.error('keyframe_quality_failed', JSON.stringify({
+        versionId: version.id,
+        shotNumber,
+        requestId: shot.keyframe_quality_request_id,
+        reason: state.error,
+      }));
+      await settleUsageCost(admin, {
+        entryId: qualityLedgerId,
+        outcome: state.costUsd === null ? 'released' : 'charged',
+        actualCostUsd: state.costUsd ?? 0,
+        usdToEur: env.USD_TO_EUR_RATE,
+        eurToFcfa: env.EUR_TO_FCFA,
+        billable: false,
+      });
       await admin.from('video_shots').update({ keyframe_status: 'failed', error_message: 'Le contrôle automatique de cette image-clé n’a pas abouti.', updated_at: now }).eq('version_id', version.id).eq('shot_number', shotNumber);
       return;
     }
