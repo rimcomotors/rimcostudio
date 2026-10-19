@@ -21,6 +21,7 @@ describe('fal keyframe helpers', () => {
   it('accepts only explicit valid JSON quality decisions', () => {
     expect(parseKeyframeQuality('{"approved":true,"issues":[],"reason":"Conforme"}')).toEqual({ approved: true, issues: [], reason: 'Conforme' });
     expect(parseKeyframeQuality('```json\n{"approved":false,"issues":["couleur différente"],"reason":"Véhicule incorrect"}\n```')?.approved).toBe(false);
+    expect(parseKeyframeQuality('Analyse terminée. Résultat : {"approved":true,"issues":[],"reason":"Conforme"}')).toEqual({ approved: true, issues: [], reason: 'Conforme' });
     expect(parseKeyframeQuality('yes')).toBeNull();
     expect(parseKeyframeQuality('{"approved":"yes","issues":[],"reason":"x"}')).toBeNull();
   });
@@ -37,6 +38,17 @@ describe('fal keyframe helpers', () => {
       reasoning: true,
       image_urls: ['https://assets.example/keyframe.png'],
     }) });
+  });
+
+  it('requests fal diagnostics when the vision queue fails', async () => {
+    vi.stubEnv('LLM_MODEL', 'anthropic/claude-sonnet-5.5');
+    mockStatus.mockResolvedValue({ status: 'FAILED', logs: [{ message: 'Provider rejected the response.' }] });
+    const { readKeyframeQuality, KEYFRAME_VISION_ENDPOINT } = await import('./fal-keyframes');
+
+    await expect(readKeyframeQuality('vision-check-failed', 'test-fal-key')).resolves.toMatchObject({
+      status: 'failed', error: 'Provider rejected the response.',
+    });
+    expect(mockStatus).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { requestId: 'vision-check-failed', logs: true });
   });
 
   it('animates the generated image as the opening frame while preserving motion direction', () => {
