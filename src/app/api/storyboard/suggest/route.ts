@@ -4,7 +4,7 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, getSingleShotClipDurations, singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
+import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, fitStoryboardDurations, getSingleShotClipDurations, singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
@@ -28,7 +28,6 @@ const requestSchema = z.object({
   character: z.string().trim().max(160).default(''),
   lighting: z.string().trim().max(160).default(''),
 });
-const storyboardResponseSchema = z.object({ shots: storyboardSchema }).strict();
 const singleShotStoryboardResponseSchema = z.object({ shots: singleShotStoryboardSchema }).strict();
 
 export async function POST(request: Request) {
@@ -135,7 +134,11 @@ export async function POST(request: Request) {
           const fal = createFalClient({ credentials: falCredential.apiKey });
           return fal.subscribe('openrouter/router', { input: buildFalLlmInput(prompt, system, env.LLM_MODEL!) as never });
         });
-        const responseSchema = input.workflow === 'single' ? singleShotStoryboardResponseSchema : storyboardResponseSchema;
+        const responseSchema = input.workflow === 'single'
+          ? singleShotStoryboardResponseSchema
+          : z.object({ shots: storyboardSchema }).strict().transform(({ shots }) => ({
+              shots: fitStoryboardDurations(shots, input.durationSeconds, route.adapterFamily),
+            }));
         const result = await provider.buildStoryboardWithCost(instruction, responseSchema, 'You are an expert automotive commercial director. Return only JSON matching the requested schema. Use French for all creative text.');
         shots = result.fields.shots;
         storyboardCostUsd = result.costUsd ?? 0.02;

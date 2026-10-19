@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBrief } from '@/core/brief';
-import { buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, getSingleShotClipDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
+import { buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, fitStoryboardDurations, getSingleShotClipDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
 
 const shots = [
   { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 8, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
@@ -44,6 +44,20 @@ describe('storyboard', () => {
     expect(instruction).toContain('Fin de journée');
     expect(instruction).toContain('scene 160');
     expect(instruction).toContain('action 180');
+    expect(instruction).toContain('Use exactly 2 shots and make every shot exactly 5 seconds.');
+  });
+
+  it('rebalances model shot durations to fit the provider limits and requested runtime', () => {
+    const fitted = fitStoryboardDurations([
+      { ...shots[0], durationSeconds: 3 },
+      { ...shots[1], durationSeconds: 4 },
+      { ...shots[0], title: 'Final', durationSeconds: 3 },
+    ], 10, 'seedance');
+
+    expect(fitted).toHaveLength(2);
+    expect(fitted.map((shot) => shot.durationSeconds)).toEqual([5, 5]);
+    expect(fitted.map((shot) => shot.title)).toEqual(['Découverte', 'Final']);
+    expect(validateStoryboard(fitted, 10, 'seedance')).toBe(true);
   });
 
   it('keeps verbose model storyboard fields within the validated limits without cutting a word', () => {
