@@ -16,4 +16,11 @@ describe('aggregateGenerationCost', () => {
       { kind: 'generation', ai_model_id: 'fal-model', seconds: 5, cost_usd: 1, price_fcfa: 800, status: 'released' },
     ], 0.9, 655.957)).toBeNull();
   });
+
+  it('prices the requested runtime while keeping overgenerated duration in the real cost total', () => {
+    const result = aggregateGenerationCost([
+      { kind: 'generation', ai_model_id: 'seedance', seconds: 32, cost_usd: 6.4, billable_cost_usd: 2, price_fcfa: 1535, status: 'charged' },
+    ], 0.9, 655.957);
+    expect(result).toEqual({ costUsd: 6.4, priceFcfa: 1535, seconds: 32, status: 'charged' });
+  });
 });

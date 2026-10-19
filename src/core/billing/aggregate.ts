@@ -5,6 +5,7 @@ export type UsageLedgerRow = {
   ai_model_id?: string | null;
   seconds?: number | string | null;
   cost_usd?: number | string | null;
+  billable_cost_usd?: number | string | null;
   price_fcfa?: number | string | null;
   status?: string | null;
 };
@@ -32,7 +33,8 @@ export function aggregateGenerationCost(
 
   const costUsd = activeRows.reduce((sum, row) => sum + Math.max(0, Number(row.cost_usd ?? 0)), 0);
   const storedPrice = activeRows.reduce((sum, row) => sum + Math.max(0, Number(row.price_fcfa ?? 0)), 0);
-  const priceFcfa = costUsd > 0 ? calculateClientPriceFcfa(costUsd, usdToEur, eurToFcfa) : storedPrice;
+  const billableCostUsd = activeRows.reduce((sum, row) => sum + Math.max(0, Number(row.billable_cost_usd ?? row.cost_usd ?? 0)), 0);
+  const priceFcfa = billableCostUsd > 0 ? calculateClientPriceFcfa(billableCostUsd, usdToEur, eurToFcfa) : storedPrice;
   const videoRows = activeRows.filter((row) => row.ai_model_id);
   const durationRows = videoRows.length ? videoRows : activeRows;
   const seconds = Math.max(...durationRows.map((row) => Math.max(0, Number(row.seconds ?? 0))), 0);

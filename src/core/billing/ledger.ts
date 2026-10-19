@@ -23,6 +23,7 @@ export async function reserveGenerationCost(admin: AdminClient, input: {
   modelId: string;
   department: string;
   seconds: number;
+  billableSeconds?: number;
   priceUsdPerSecond: number;
   usdToEur: number;
   eurToFcfa: number;
@@ -34,6 +35,10 @@ export async function reserveGenerationCost(admin: AdminClient, input: {
   ensurePositiveFinite(input.eurToFcfa, 'taux EUR/FCFA');
   ensurePositiveFinite(input.priceFcfa, 'prix facturé', true);
   const costUsd = input.seconds * input.priceUsdPerSecond;
+  const billableSeconds = input.billableSeconds ?? input.seconds;
+  ensurePositiveFinite(billableSeconds, 'durée facturable', true);
+  if (billableSeconds > input.seconds) throw new Error('La durée facturable ne peut pas dépasser la durée réservée.');
+  const billableCostUsd = billableSeconds * input.priceUsdPerSecond;
   const costEur = costUsd * input.usdToEur;
   const { data, error } = await admin.from('usage_ledger').insert({
     version_id: input.versionId,
@@ -45,7 +50,9 @@ export async function reserveGenerationCost(admin: AdminClient, input: {
     cost_usd: costUsd,
     cost_eur: costEur,
     cost_real_fcfa: costEur * input.eurToFcfa,
-    applied_fcfa_per_second: input.priceFcfa / input.seconds,
+    billable_seconds: billableSeconds,
+    billable_cost_usd: billableCostUsd,
+    applied_fcfa_per_second: billableSeconds > 0 ? input.priceFcfa / billableSeconds : 0,
     price_fcfa: input.priceFcfa,
     status: 'reserved',
   }).select('id').single();
@@ -106,6 +113,7 @@ export async function settleUsageCost(admin: AdminClient, input: {
   entryId: string;
   outcome: Outcome;
   actualCostUsd: number;
+  actualSeconds?: number;
   usdToEur: number;
   eurToFcfa: number;
   /** LLM preparation is tracked for operations but is included in the video total at read time. */
@@ -114,9 +122,10 @@ export async function settleUsageCost(admin: AdminClient, input: {
   ensurePositiveFinite(input.usdToEur, 'taux USD/EUR');
   ensurePositiveFinite(input.eurToFcfa, 'taux EUR/FCFA');
   if (input.outcome === 'charged') ensurePositiveFinite(input.actualCostUsd, 'coût fournisseur', true);
+  if (input.actualSeconds !== undefined) ensurePositiveFinite(input.actualSeconds, 'durée réellement générée', true);
 
   const { data: entry, error: readError } = await admin.from('usage_ledger')
-    .select('id,status,seconds,price_fcfa')
+    .select('id,status,seconds,price_fcfa,billable_seconds,billable_cost_usd')
     .eq('id', input.entryId)
     .maybeSingle();
   if (readError) return { error: normalizeError(readError) };
@@ -125,14 +134,17 @@ export async function settleUsageCost(admin: AdminClient, input: {
   const patch: Record<string, number | string> = { status: input.outcome };
   if (input.outcome === 'charged') {
     const costEur = input.actualCostUsd * input.usdToEur;
-    const priceFcfa = input.billable === false ? 0 : input.actualCostUsd > 0
-      ? calculateClientPriceFcfa(input.actualCostUsd, input.usdToEur, input.eurToFcfa)
+    const clientBillableCost = typeof entry.billable_cost_usd === 'number' ? entry.billable_cost_usd : input.actualCostUsd;
+    const priceFcfa = input.billable === false ? 0 : clientBillableCost > 0
+      ? calculateClientPriceFcfa(clientBillableCost, input.usdToEur, input.eurToFcfa)
       : Number(entry.price_fcfa);
     patch.cost_usd = input.actualCostUsd;
+    if (input.actualSeconds !== undefined) patch.seconds = input.actualSeconds;
     patch.cost_eur = costEur;
     patch.cost_real_fcfa = costEur * input.eurToFcfa;
     patch.price_fcfa = priceFcfa;
-    patch.applied_fcfa_per_second = Number(entry.seconds) > 0 ? priceFcfa / Number(entry.seconds) : 0;
+    const billableSeconds = Number(entry.billable_seconds ?? entry.seconds);
+    patch.applied_fcfa_per_second = billableSeconds > 0 ? priceFcfa / billableSeconds : 0;
   }
 
   const { data, error } = await admin.from('usage_ledger').update(patch)

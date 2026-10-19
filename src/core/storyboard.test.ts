@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBrief } from '@/core/brief';
-import { buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, fitStoryboardDurations, getSingleShotClipDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
+import { buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, fitStoryboardDurations, getSingleShotClipDurations, isPremiumTenSecondAd, premiumTenSecondAdDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validatePremiumTenSecondAdStoryboard, validateStoryboard } from './storyboard';
 
 const shots = [
   { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 8, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
@@ -29,7 +29,7 @@ describe('storyboard', () => {
       vehicle: 'GWM Tank 300 noir',
       vehiclePhotos: [{ id: 'vehicle-front', role: 'exterior', title: 'Avant trois-quarts' }],
       places: [{ id: 'place-plateau', title: 'Abidjan, Plateau' }],
-      purpose: 'advertising',
+      purpose: 'presentation',
       direction: 'Une famille traverse Abidjan au coucher du soleil.',
       format: '9:16',
       character: 'Une famille à bord du véhicule',
@@ -45,6 +45,28 @@ describe('storyboard', () => {
     expect(instruction).toContain('scene 160');
     expect(instruction).toContain('action 180');
     expect(instruction).toContain('Use exactly 2 shots and make every shot exactly 5 seconds.');
+  });
+
+  it('plans four distinct four-second generation clips for a 10-second Premium advertisement', () => {
+    expect(isPremiumTenSecondAd('premium', 'advertising', 10)).toBe(true);
+    expect(isPremiumTenSecondAd('pro', 'advertising', 10)).toBe(false);
+    expect(isPremiumTenSecondAd('premium', 'presentation', 10)).toBe(false);
+    expect(premiumTenSecondAdDurations()).toEqual({ generated: [4, 4, 4, 4], editorial: [2.5, 2.5, 2.5, 2.5] });
+    const fourShots = [2, 3, 2, 3].map((durationSeconds, index) => ({ ...shots[0], title: `Plan ${index + 1}`, durationSeconds }));
+    expect(validatePremiumTenSecondAdStoryboard(fourShots)).toBe(true);
+    expect(() => validatePremiumTenSecondAdStoryboard(fourShots.slice(0, 2))).toThrow(/quatre/i);
+  });
+
+  it('asks the Premium advertising director for four varied short shots only for 10 seconds', () => {
+    const instruction = buildStoryboardInstruction({
+      durationSeconds: 10, mode: 'premium', vehicle: 'GWM Tank 300 gris', vehiclePhotos: [{ id: 'front', role: 'exterior', title: 'Avant' }],
+      places: [{ id: 'hkb', title: 'Pont HKB' }], purpose: 'advertising', format: '16:9',
+    });
+    expect(instruction).toContain('Use exactly 4 distinct shots');
+    expect(instruction).toContain('Each will be generated as a separate 4-second');
+    expect(instruction).toContain('Absolutely no people anywhere in any shot');
+    expect(instruction).toContain('A macro or close-up detail is allowed only when that exact detail is clearly visible');
+    expect(instruction).not.toContain('Use exactly 2 shots and make every shot exactly 5 seconds');
   });
 
   it('rebalances model shot durations to fit the provider limits and requested runtime', () => {
@@ -82,6 +104,15 @@ describe('storyboard', () => {
     expect(prompt).toContain('shot 1 of 2');
     expect(prompt).toContain('no titles, captions, overlays, added logos, or transitions');
     expect(prompt).toContain('natural environmental effects requested by the brief, such as dust from a dirt road');
+  });
+
+  it('strictly excludes visible occupants from Premium automotive advertising when none are selected', () => {
+    const brief = buildBrief('Film automobile premium à Abidjan.', {
+      vehicle_asset_id: 'vehicle-folder-1', vehicle_description: 'GWM Tank 300 gris', character: 'Aucun personnage',
+    });
+    const prompt = shotToPrompt(brief, shots[0], 0, 4);
+    expect(prompt).toMatch(/no visible driver, passenger, face, person, or human silhouette/i);
+    expect(prompt).toMatch(/The vehicle is visually unoccupied/i);
   });
 
   it('does not suppress people explicitly requested in the creative direction', () => {
