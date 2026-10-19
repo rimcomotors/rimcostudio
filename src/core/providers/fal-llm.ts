@@ -29,9 +29,11 @@ export function buildFalLlmInput(prompt: string, systemPrompt: string, model: st
     prompt,
     system_prompt: systemPrompt,
     model,
-    reasoning: true,
+    // The endpoint can append reasoning to the final text when this is enabled,
+    // which makes a JSON-only response fragile and consumes the output budget.
+    reasoning: false,
     temperature: 0.2,
-    max_tokens: 1200,
+    max_tokens: 4000,
   } as const;
 }
 
@@ -51,13 +53,22 @@ function parseJson(text: string): unknown {
   return JSON.parse(normalized) as unknown;
 }
 
+function incompleteResponseIssue(response: unknown): string | null {
+  if (!response || typeof response !== 'object') return null;
+  const root = response as { partial?: unknown; error?: unknown; data?: { partial?: unknown; error?: unknown } };
+  const result = root.data ?? root;
+  if (result.partial === true) return 'Le fournisseur a signalé une réponse partielle.';
+  if (typeof result.error === 'string' && result.error.trim()) return 'Le fournisseur a signalé une erreur de génération.';
+  return null;
+}
+
 async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodType<T>, instructions = systemPrompt) {
   let lastIssue = 'La réponse ne respecte pas le format attendu.';
   let costUsd = 0;
   let hasReportedCost = false;
   let completedRequests = 0;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-      const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire: la réponse précédente était invalide (${lastIssue}). Respecte exactement le schéma JSON demandé.`;
+      const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire : renvoie un seul objet JSON complet, sans raisonnement, commentaire ni balisage Markdown. Respecte exactement le schéma demandé.`;
     let response: unknown;
     try {
       response = await call(request, instructions);
@@ -69,6 +80,11 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
     if (reportedCost !== null) {
       costUsd += reportedCost;
       hasReportedCost = true;
+    }
+    const incompleteIssue = incompleteResponseIssue(response);
+    if (incompleteIssue) {
+      lastIssue = incompleteIssue;
+      continue;
     }
     try {
       const fieldsResult = schema.safeParse(parseJson(outputText(response)));

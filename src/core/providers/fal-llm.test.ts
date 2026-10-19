@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import { buildFalLlmInput, createFalLlmProvider } from './fal-llm';
 
 const generated = {
@@ -7,15 +8,29 @@ const generated = {
 };
 
 describe('fal LLM brief adapter', () => {
-  it('enables required reasoning and bounds generation tokens for fal OpenRouter', () => {
+  it('keeps reasoning out of the JSON answer and allows enough tokens for a complete storyboard', () => {
     expect(buildFalLlmInput('brief', 'system', 'anthropic/claude-sonnet-5.5')).toEqual({
       prompt: 'brief',
       system_prompt: 'system',
       model: 'anthropic/claude-sonnet-5.5',
-      reasoning: true,
+      reasoning: false,
       temperature: 0.2,
-      max_tokens: 1200,
+      max_tokens: 4000,
     });
+  });
+
+  it('retries a partial provider response with a concise instruction, then accepts valid JSON', async () => {
+    const call = vi.fn()
+      .mockResolvedValueOnce({ data: { output: JSON.stringify({ shots: [] }), partial: true, usage: { cost: 0.01 } } })
+      .mockResolvedValueOnce({ data: { output: JSON.stringify({ shots: [] }), partial: false, usage: { cost: 0.01 } } });
+    const schema = z.object({ shots: z.array(z.string()) });
+
+    const result = await createFalLlmProvider(call).buildStoryboardWithCost('brief', schema, 'JSON only');
+
+    expect(result).toMatchObject({ fields: { shots: [] }, costUsd: 0.02 });
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(call.mock.calls[1][0]).toContain('Correction obligatoire');
+    expect(call.mock.calls[1][0]).not.toContain('Unterminated string');
   });
 
   it('builds a validated structured brief and anchors vehicle identity and duration server-side', async () => {
