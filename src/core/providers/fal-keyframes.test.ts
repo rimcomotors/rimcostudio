@@ -25,6 +25,20 @@ describe('fal keyframe helpers', () => {
     expect(parseKeyframeQuality('{"approved":"yes","issues":[],"reason":"x"}')).toBeNull();
   });
 
+  it('requires reasoning for the fal vision check endpoint', async () => {
+    vi.stubEnv('LLM_MODEL', 'anthropic/claude-sonnet-5.5');
+    mockSubmit.mockResolvedValue({ request_id: 'vision-check-1' });
+    const { submitKeyframeQuality, KEYFRAME_VISION_ENDPOINT } = await import('./fal-keyframes');
+
+    await submitKeyframeQuality({ prompt: 'Vérifie le véhicule et le lieu.', imageUrls: ['https://assets.example/keyframe.png'] }, 'test-fal-key');
+
+    expect(mockSubmit).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { input: expect.objectContaining({
+      model: 'anthropic/claude-sonnet-5.5',
+      reasoning: true,
+      image_urls: ['https://assets.example/keyframe.png'],
+    }) });
+  });
+
   it('animates the generated image as the opening frame while preserving motion direction', () => {
     const prompt = buildKeyframeAnimationPrompt({
       shot: { title: 'Départ', scene: 'Boulevard lagunaire', framing: 'Plan large', location: 'Abidjan', action: 'Le véhicule démarre doucement', camera: 'Travelling latéral', durationSeconds: 5, vehiclePhotoId: 'vehicle-1', locationPhotoId: 'place-1' },
