@@ -24,9 +24,28 @@ export type ReferenceVideoProvider = {
   status(requestId: string, apiKey?: string, endpointOverride?: string): Promise<{ status: ProviderStatus; videoUrl?: string; error?: string }>;
 };
 
+function providerDetail(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+
+  return value.slice(0, 3).flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const fieldError = item as Record<string, unknown>;
+    const location = Array.isArray(fieldError.loc)
+      ? fieldError.loc.slice(0, 5).filter((part): part is string | number => typeof part === 'string' || typeof part === 'number').join('.')
+      : '';
+    const message = typeof fieldError.msg === 'string' ? fieldError.msg.slice(0, 160) : '';
+    if (!location && !message) return [];
+    return [`${location ? `${location}: ` : ''}${message}`];
+  }).join('; ');
+}
+
 /** Keep actionable provider errors while removing URLs and credential-like values. */
 export function safeProviderError(error: unknown, apiKey?: string): string {
-  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : null;
+  const body = record?.body && typeof record.body === 'object' ? record.body as Record<string, unknown> : null;
+  const detail = providerDetail(body?.detail);
+  const raw = detail || (error instanceof Error ? error.message : typeof error === 'string' ? error : typeof record?.message === 'string' ? record.message : '');
   const redacted = apiKey ? raw.replaceAll(apiKey, '[clé masquée]') : raw;
   const safe = redacted
     .replace(/https?:\/\/\S+/gi, '[URL masquée]')
