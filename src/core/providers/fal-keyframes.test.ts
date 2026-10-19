@@ -60,7 +60,7 @@ describe('fal keyframe helpers', () => {
     expect(parseKeyframeQuality('{"approved":true,"reason":"Conforme"}')).toBeNull();
   });
 
-  it('uses the documented fal vision input without forcing reasoning output', async () => {
+  it('enables the reasoning mode required by the configured fal vision model', async () => {
     vi.stubEnv('LLM_MODEL', 'anthropic/claude-sonnet-5.5');
     mockSubmit.mockResolvedValue({ request_id: 'vision-check-1' });
     const { submitKeyframeQuality, KEYFRAME_VISION_ENDPOINT } = await import('./fal-keyframes');
@@ -69,11 +69,12 @@ describe('fal keyframe helpers', () => {
 
     expect(mockSubmit).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { input: expect.objectContaining({
       model: 'anthropic/claude-sonnet-5.5',
+      reasoning: true,
       max_tokens: 1500,
       system_prompt: expect.stringContaining('objet JSON compact'),
       image_urls: ['https://assets.example/keyframe.png'],
     }) });
-    expect(mockSubmit.mock.calls[0][1].input).not.toHaveProperty('reasoning');
+    expect(mockSubmit.mock.calls[0][1].input.reasoning).toBe(true);
   });
 
   it('polls a saved fal endpoint instead of silently switching to the current default', async () => {

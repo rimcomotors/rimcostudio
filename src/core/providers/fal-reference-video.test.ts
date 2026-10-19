@@ -56,6 +56,19 @@ describe('fal Reference-to-Video adapters', () => {
       .toBe('Invalid reference [URL masquée] bearer=[masqué]');
     expect(safeProviderError(new Error('Invalid prompt: unsupported camera movement')))
       .toBe('Invalid prompt: unsupported camera movement');
+    expect(safeProviderError({
+      message: 'Unprocessable Entity', status: 422,
+      body: { detail: 'Invalid image URL https://assets.example/private.jpg; bearer: secret-token' },
+    })).toBe('Invalid image URL [URL masquée] bearer=[masqué]');
+    expect(safeProviderError({
+      message: 'Unprocessable Entity', status: 422,
+      body: { detail: [
+        { loc: ['body', 'image_url'], msg: 'Input should be a valid URL: https://assets.example/private.jpg', type: 'url_parsing' },
+        { loc: ['body', 'prompt'], msg: 'Invalid bearer: secret-token', type: 'value_error' },
+        { loc: ['body', 'extra'], msg: 'Ignored after bounded detail count', type: 'extra_forbidden' },
+        { loc: ['body', 'fourth'], msg: 'This detail is omitted', type: 'extra_forbidden' },
+      ] },
+    })).toBe('body.image_url: Input should be a valid URL: [URL masquée] body.prompt: Invalid bearer=[masqué]; body.extra: Ignored after bounded detail count');
   });
 
   it('rejects unsupported clip lengths, ratios, and too many Kling reference images before queue submission', async () => {
