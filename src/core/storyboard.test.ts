@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildBrief } from '@/core/brief';
-import { buildStoryboardInstruction, expandSingleShotStoryboard, finalVideoSeconds, getSingleShotClipDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
+import { buildStoryboardInstruction, compactStoryboardText, expandSingleShotStoryboard, finalVideoSeconds, getSingleShotClipDurations, shotDraftSchema, shotToPrompt, storyboardSchema, validateStoryboard } from './storyboard';
 
 const shots = [
   { title: 'Découverte', scene: 'Plan large', framing: 'Plan large', location: 'Plateau', action: 'Le véhicule avance lentement', camera: 'Travelling latéral', durationSeconds: 8, vehiclePhotoId: 'vehicle-front', locationPhotoId: 'place-plateau' },
@@ -42,6 +42,18 @@ describe('storyboard', () => {
     expect(instruction).toContain('automotive commercial film director');
     expect(instruction).toContain('Une famille à bord du véhicule');
     expect(instruction).toContain('Fin de journée');
+    expect(instruction).toContain('scene 160');
+    expect(instruction).toContain('action 180');
+  });
+
+  it('keeps verbose model storyboard fields within the validated limits without cutting a word', () => {
+    const text = `${'A precise cinematic scene with the vehicle advancing slowly. '.repeat(5)}`;
+    const compact = compactStoryboardText(text, 160);
+
+    expect(compact.length).toBeLessThanOrEqual(160);
+    expect(text.startsWith(compact)).toBe(true);
+    expect(compact).toMatch(/[.!?]$/);
+    expect(shotDraftSchema.parse({ ...shots[0], scene: text }).scene).toBe(compact);
   });
 
   it('keeps the selected vehicle identity and image references in each shot prompt', () => {
