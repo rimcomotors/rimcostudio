@@ -48,7 +48,7 @@ describe('fal keyframe helpers', () => {
     expect(parseKeyframeQuality('{"approved":true,"reason":"Conforme"}')).toBeNull();
   });
 
-  it('keeps reasoning out of the strict JSON quality-check response', async () => {
+  it('enables required reasoning for fal vision and extracts the strict JSON decision', async () => {
     vi.stubEnv('LLM_MODEL', 'anthropic/claude-sonnet-5.5');
     mockSubmit.mockResolvedValue({ request_id: 'vision-check-1' });
     const { submitKeyframeQuality, KEYFRAME_VISION_ENDPOINT } = await import('./fal-keyframes');
@@ -57,7 +57,7 @@ describe('fal keyframe helpers', () => {
 
     expect(mockSubmit).toHaveBeenCalledWith(KEYFRAME_VISION_ENDPOINT, { input: expect.objectContaining({
       model: 'anthropic/claude-sonnet-5.5',
-      reasoning: false,
+      reasoning: true,
       max_tokens: 500,
       system_prompt: expect.stringContaining('un seul objet JSON valide'),
       image_urls: ['https://assets.example/keyframe.png'],
