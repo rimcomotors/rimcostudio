@@ -20,7 +20,7 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
       const { data: version } = await admin.from('video_versions').select('status,brief_json').eq('id', id).maybeSingle();
       const brief = version?.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
       const metrics = brief.processingMetrics && typeof brief.processingMetrics === 'object' ? brief.processingMetrics as ProcessingMetrics : {};
-      const processingStageName = processingStage(version?.status ?? result.status, metrics);
+      const processingStageName = 'processingStage' in result && result.processingStage === 'quality_checking' ? 'quality_checking' : processingStage(version?.status ?? result.status, metrics);
       const stageStartedAt = processingStageName === 'queued' ? metrics.providerSubmittedAt : processingStageName === 'keyframing' ? metrics.keyframingStartedAt : processingStageName === 'generating' ? metrics.generationStartedAt ?? metrics.providerSubmittedAt : processingStageName === 'transferring' ? metrics.providerCompletedAt : processingStageName === 'postprocessing' ? metrics.postproductionStartedAt : undefined;
       return NextResponse.json({ ...result, processingStage: processingStageName, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, version?.status ?? result.status) });
     }

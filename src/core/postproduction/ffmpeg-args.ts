@@ -120,7 +120,7 @@ export function makeMultiClipMontageArgs(input: MultiClipMontageArgs) {
   if (hasNewDurationContract && (![7, 12, 17, 22].includes(input.finalDurationSeconds) || input.finalDurationSeconds !== input.clipDurationSeconds! + 2)) throw new Error('La vidéo finale doit ajouter exactement deux secondes au logo.');
   if (!hasNewDurationContract && ![5, 10, 15, 20, 30].includes(input.finalDurationSeconds)) throw new Error('La durée enregistrée n’est pas prise en charge.');
   const footageSeconds = input.clipDurationSeconds ?? input.finalDurationSeconds - 2;
-  if ((input.singleStoryboardMode ? clipSeconds < footageSeconds : clipSeconds !== footageSeconds) || input.shotDurations.some((seconds) => !Number.isInteger(seconds) || seconds <= 0)) throw new Error('Les plans doivent laisser exactement deux secondes au logo final.');
+  if ((input.singleStoryboardMode ? clipSeconds < footageSeconds : clipSeconds !== footageSeconds) || input.shotDurations.some((seconds) => !Number.isFinite(seconds) || seconds <= 0)) throw new Error('Les plans doivent laisser exactement deux secondes au logo final.');
   const format = normalizeVideoFormat(input.format);
   const [width, height] = OUTPUT_DIMENSIONS[format];
   const args = ['-hide_banner', '-loglevel', 'error', '-y'];

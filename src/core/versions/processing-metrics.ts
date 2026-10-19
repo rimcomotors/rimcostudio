@@ -14,7 +14,7 @@ export type ProcessingMetrics = {
   failedAt?: string;
 };
 
-export type ProcessingStage = 'queued' | 'keyframing' | 'generating' | 'transferring' | 'postprocessing' | 'ready' | 'failed';
+export type ProcessingStage = 'queued' | 'keyframing' | 'generating' | 'quality_checking' | 'transferring' | 'postprocessing' | 'ready' | 'failed';
 
 export function firstObservedAt(metrics: ProcessingMetrics, key: keyof ProcessingMetrics, observedAt: string) {
   return metrics[key] ? metrics : { ...metrics, [key]: observedAt };

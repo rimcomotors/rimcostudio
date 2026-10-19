@@ -31,6 +31,15 @@ describe('usage cost ledger', () => {
     });
   });
 
+  it('reserves actual provider seconds while fixing the customer quote to the selected runtime', async () => {
+    const mock = createAdminMock();
+    await reserveGenerationCost(mock.admin as never, {
+      userId: 'user-1', versionId: 'version-1', modelId: 'seedance', department: 'Direction',
+      seconds: 32, billableSeconds: 10, priceUsdPerSecond: 0.2, usdToEur: 0.9, eurToFcfa: 655.957, priceFcfa: 1535,
+    });
+    expect(mock.inserted[0]).toMatchObject({ seconds: 32, cost_usd: 6.4, billable_seconds: 10, billable_cost_usd: 2, price_fcfa: 1535 });
+  });
+
   it('records an LLM reservation as a zero customer price entry', async () => {
     const mock = createAdminMock();
     await reserveLlmCost(mock.admin as never, {
@@ -66,6 +75,18 @@ describe('usage cost ledger', () => {
     expect(result.error).toBeNull();
     expect(mock.updates[0]).toMatchObject({ status: 'charged', cost_usd: 1, cost_eur: 0.9, price_fcfa: 768, applied_fcfa_per_second: 76.8 });
     expect(mock.query.eq).toHaveBeenCalledWith('status', 'reserved');
+  });
+
+  it('charges actual provider cost but retains the user price for the selected runtime', async () => {
+    const ledger = { id: 'entry-1', status: 'reserved', seconds: 32, billable_seconds: 10, billable_cost_usd: 2, price_fcfa: 1535 };
+    const mock = createAdminMock({ ledger });
+    mock.query.maybeSingle.mockResolvedValueOnce({ data: ledger, error: null });
+    mock.query.maybeSingle.mockResolvedValueOnce({ data: { id: 'entry-1' }, error: null });
+    const result = await settleUsageCost(mock.admin as never, {
+      entryId: 'entry-1', outcome: 'charged', actualCostUsd: 3.2, actualSeconds: 16, usdToEur: 0.9, eurToFcfa: 655.957,
+    });
+    expect(result.error).toBeNull();
+    expect(mock.updates[0]).toMatchObject({ cost_usd: 3.2, seconds: 16, price_fcfa: 1535, applied_fcfa_per_second: 153.5 });
   });
 
   it('keeps the LLM ledger non-billable while settling its provider cost', async () => {

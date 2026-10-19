@@ -11,6 +11,7 @@ import { firstObservedAt, type ProcessingMetrics } from '@/core/versions/process
 const ffmpegPath = join(process.cwd(), '.generated', 'ffmpeg');
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const logoFile = join(process.cwd(), 'public', 'brand', 'logo-rimco.png');
 
 type AdminClient = ReturnType<typeof createStorageAdminClient>;
@@ -142,8 +143,10 @@ export async function assembleShotMontage(versionId: string) {
   const outputFile = join(directory, 'montage.mp4');
   try {
     await Promise.all(clipFiles.map((path, index) => writeFile(path, clipBytes[index])));
+    const requestedCuts = Array.isArray(brief.shotOutputDurations) ? brief.shotOutputDurations : null;
+    const cutDurations = requestedCuts?.length === shots.length ? requestedCuts.map(Number) : shots.map((shot) => Number(shot.duration_seconds));
     const args = isStoryboard
-      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: shots.map((shot) => Number(shot.duration_seconds)), logoFile, outputFile, finalDurationSeconds: Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: brief.clipDurationSeconds as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
+      ? makeMultiClipMontageArgs({ shotFiles: clipFiles, shotDurations: cutDurations, logoFile, outputFile, finalDurationSeconds: Number(brief.finalDurationSeconds), ...(typeof brief.clipDurationSeconds === 'number' ? { clipDurationSeconds: brief.clipDurationSeconds as 5 | 10 | 15 | 20 } : {}), singleStoryboardMode: brief.singleStoryboardMode === true, format: briefFormat })
       : makeShotMontageArgs({ shotFiles: clipFiles as [string, string], logoFile, outputFile, overlayLogo, durationSeconds: 6, format: briefFormat });
     await runFfmpeg(ffmpegPath, args);
     const outputStat = await stat(outputFile);
@@ -158,6 +161,30 @@ export async function assembleShotMontage(versionId: string) {
     const { error: updateVideoError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (updateVideoError) throw new HttpError(503, 'Le montage est prêt; son état doit être réconcilié.');
     return { finalPath };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/** Extract three representative frames for the clip quality gate before montage. */
+export async function extractRepresentativeVideoFrames(bytes: Buffer): Promise<Buffer[]> {
+  try { await access(ffmpegPath, constants.X_OK); }
+  catch { throw new HttpError(503, 'FFmpeg n’est pas disponible sur ce déploiement.'); }
+  const directory = await mkdtemp(join(tmpdir(), 'rimco-quality-'));
+  const inputFile = join(directory, 'clip.mp4');
+  const timestamps = [0.5, 2, 3.5];
+  const outputFiles = timestamps.map((_, index) => join(directory, `frame-${index + 1}.jpg`));
+  try {
+    await writeFile(inputFile, bytes);
+    await Promise.all(outputFiles.map((outputFile, index) => runFfmpeg(ffmpegPath, [
+      '-hide_banner', '-loglevel', 'error', '-y', '-ss', String(timestamps[index]), '-i', inputFile,
+      '-frames:v', '1', '-vf', 'scale=960:-2', '-q:v', '3', outputFile,
+    ])));
+    return await Promise.all(outputFiles.map(async (path) => {
+      const info = await stat(path);
+      if (info.size <= 0 || info.size > MAX_IMAGE_BYTES) throw new HttpError(502, 'Une image de contrôle du clip est invalide.');
+      return readFile(path);
+    }));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

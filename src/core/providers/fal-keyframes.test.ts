@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, canAnimateKeyframes, extractFalVisionResult, keyframeQualityAction, parseKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes } from './fal-keyframes';
+import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, buildVideoQualityPrompt, canAnimateKeyframes, extractFalVisionResult, keyframeQualityAction, parseKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, videoQualityAction } from './fal-keyframes';
 
 const { mockSubmit, mockStatus, mockResult } = vi.hoisted(() => ({ mockSubmit: vi.fn(), mockStatus: vi.fn(), mockResult: vi.fn() }));
 vi.mock('@fal-ai/client', () => ({ createFalClient: vi.fn(() => ({ queue: { submit: mockSubmit, status: mockStatus, result: mockResult } })) }));
@@ -60,6 +60,32 @@ describe('fal keyframe helpers', () => {
     expect(prompt).toContain('image 1 = candidate keyframe');
     expect(prompt).toContain('images 2 to 4 = approved views of the same exact vehicle');
     expect(prompt).toContain('image 5 = selected location');
+  });
+
+  it('rejects visible occupants and composite keyframe layouts when no people are requested', () => {
+    const prompt = buildKeyframeQualityPrompt({ vehicleReferenceCount: 2, hasLocationReference: true, excludePeople: true });
+    expect(prompt).toContain('visible driver, passenger, face, person, or human silhouette');
+    expect(prompt).toContain('collage, diptych, split-screen, or multi-panel');
+  });
+
+  it('builds a clip review prompt from three sampled frames and the selected identity references', () => {
+    const prompt = buildVideoQualityPrompt({ vehicleReferenceCount: 2, hasLocationReference: true, excludePeople: true });
+    expect(prompt).toContain('Images 1 to 3 are representative frames');
+    expect(prompt).toContain('Images 4 to 5 are approved views');
+    expect(prompt).toContain('image 6 = selected location');
+    expect(prompt).toContain('split-screen');
+    expect(prompt).toContain('visually unoccupied');
+  });
+
+  it('adds exact occupant and no-collage constraints to both keyframe and motion prompts', () => {
+    const shot = { title: 'Hero', scene: 'Pont HKB', framing: '3/4 avant', location: 'Abidjan', action: 'Le SUV roule', camera: 'Travelling', durationSeconds: 4, vehiclePhotoId: 'front', locationPhotoId: 'hkb' };
+    const still = buildKeyframePrompt({ shot, vehicle: 'Tank 300 gris', lighting: 'fin de journée', format: '16:9', retryReason: null, excludePeople: true });
+    const motion = buildKeyframeAnimationPrompt({ shot, vehicle: 'Tank 300 gris', durationS: 4, mood: 'premium', lighting: 'fin de journée', excludePeople: true, retryReason: 'split-screen' });
+    expect(still).toContain('visually unoccupied');
+    expect(still).toContain('never a collage, diptych, or split-screen');
+    expect(motion).toContain('visually unoccupied');
+    expect(motion).toContain('never a collage, diptych, split-screen');
+    expect(motion).toContain('Correct these specific quality issues');
   });
 
   it('accepts only explicit valid JSON quality decisions', () => {
@@ -185,6 +211,12 @@ describe('fal keyframe helpers', () => {
     expect(canAnimateKeyframes(['ready', 'checking'])).toBe(false);
     expect(canAnimateKeyframes(['ready', 'ready'])).toBe(true);
     expect(canAnimateKeyframes([])).toBe(false);
+  });
+
+  it('allows only one automatic retry after a video clip fails quality control', () => {
+    expect(videoQualityAction(true, 0)).toBe('accept');
+    expect(videoQualityAction(false, 0)).toBe('retry');
+    expect(videoQualityAction(false, 1)).toBe('reject');
   });
 
   it('animates Standard keyframes through Wan 3.0 using the accepted image as its first frame', async () => {

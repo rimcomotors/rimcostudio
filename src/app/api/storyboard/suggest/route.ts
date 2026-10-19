@@ -4,7 +4,7 @@ import { errorResponse, getActor, HttpError } from '@/core/auth/guards';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
-import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, fitStoryboardDurations, getSingleShotClipDurations, singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
+import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, fitStoryboardDurations, getSingleShotClipDurations, isPremiumTenSecondAd, singleShotStoryboardSchema, storyboardSchema, validatePremiumTenSecondAdStoryboard, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
@@ -50,6 +50,7 @@ export async function POST(request: Request) {
       }, { status: 422 });
     }
     const input = parsedInput.data;
+    const premiumTenSecondAd = input.workflow === 'multi_clip' && isPremiumTenSecondAd(input.mode, input.purpose, input.durationSeconds);
     if (input.workflow === 'multi_clip' && input.durationSeconds < 10) throw new HttpError(422, 'Le workflow multi-plans demande au moins 10 secondes de clips.');
     const supabase = await createSupabaseServerClient();
     const dossierIds = [...new Set([input.vehicleDossierId, ...input.vehicleDossierIds])];
@@ -103,14 +104,18 @@ export async function POST(request: Request) {
       const total = input.durationSeconds;
       const durations = input.workflow === 'single'
         ? [total]
+        : premiumTenSecondAd ? [2, 3, 2, 3]
         : input.mode === 'standard' ? Array.from({ length: total / 5 }, () => 5)
           : total === 10 ? [5, 5] : total === 15 ? [8, 7] : [10, 10];
+      const premiumTitles = ['Décor et révélation', 'Suivi trois-quarts', 'Détail du véhicule', 'Plan héros'];
+      const premiumActions = ['Le véhicule apparaît dans le lieu choisi.', 'La caméra suit le véhicule de façon fluide.', 'Un détail visible sur les photos devient le sujet du plan.', 'Le véhicule s’immobilise dans un cadrage trois-quarts élégant.'];
       const drafts = durations.map((durationSeconds, index) => ({
-        title: index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
-        scene: index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',
+        title: premiumTenSecondAd ? premiumTitles[index] : index === 0 ? 'Révélation du véhicule' : 'Détail et signature',
+        scene: premiumTenSecondAd ? ['Vue large du lieu', 'Suivi extérieur du véhicule', 'Détail extérieur appuyé par les photos', 'Trois-quarts avant en plan héros'][index] : index === 0 ? 'Plan d’ensemble cinématographique' : 'Plan rapproché sur le véhicule',
+        framing: premiumTenSecondAd ? ['Plan large', 'Plan moyen trois-quarts', 'Gros plan autorisé par la photo', 'Plan héros trois-quarts avant'][index] : 'Plan moyen',
         location: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.title ?? 'Abidjan, Côte d’Ivoire',
-        action: index === 0 ? 'Le véhicule avance doucement dans son environnement réel.' : 'La caméra révèle les lignes et finitions présentes sur les photos.',
-        camera: index === 0 ? 'Travelling latéral lent et stable' : 'Mouvement rapproché fluide',
+        action: premiumTenSecondAd ? premiumActions[index] : index === 0 ? 'Le véhicule avance doucement dans son environnement réel.' : 'La caméra révèle les lignes et finitions présentes sur les photos.',
+        camera: premiumTenSecondAd ? ['Travelling d’établissement lent', 'Suivi latéral stabilisé', 'Mouvement macro doux, sans changement d’angle inventé', 'Travelling avant fluide puis arrêt'][index] : index === 0 ? 'Travelling latéral lent et stable' : 'Mouvement rapproché fluide',
         durationSeconds,
         vehiclePhotoId: selectedVehicle[index % selectedVehicle.length].id,
         locationPhotoId: selectedPlaces[index % Math.max(1, selectedPlaces.length)]?.id ?? null,
@@ -137,7 +142,9 @@ export async function POST(request: Request) {
         const responseSchema = input.workflow === 'single'
           ? singleShotStoryboardResponseSchema
           : z.object({ shots: storyboardSchema }).strict().transform(({ shots }) => ({
-              shots: fitStoryboardDurations(shots, input.durationSeconds, route.adapterFamily),
+              shots: premiumTenSecondAd
+                ? (validatePremiumTenSecondAdStoryboard(shots), shots)
+                : fitStoryboardDurations(shots, input.durationSeconds, route.adapterFamily),
             }));
         const result = await provider.buildStoryboardWithCost(instruction, responseSchema, 'You are an expert automotive commercial director. Return only JSON matching the requested schema. Use French for all creative text.');
         shots = result.fields.shots;
@@ -169,7 +176,8 @@ export async function POST(request: Request) {
       }
     }
     if (input.workflow === 'single') validateSingleShotStoryboard(shots, input.durationSeconds as ClipDurationSeconds, route.adapterFamily);
-    else validateStoryboard(shots, input.durationSeconds as 15 | 20, route.adapterFamily);
+    else if (premiumTenSecondAd) validatePremiumTenSecondAdStoryboard(shots);
+    else validateStoryboard(shots, input.durationSeconds, route.adapterFamily);
     const vehicleIds = new Set(selectedVehicle.map((photo) => photo.id));
     const placeIds = new Set(selectedPlaces.map((place) => place.id));
     if (shots.some((shot) => !vehicleIds.has(shot.vehiclePhotoId) || (shot.locationPhotoId && !placeIds.has(shot.locationPhotoId)))) {

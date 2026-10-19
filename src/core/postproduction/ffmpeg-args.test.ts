@@ -19,6 +19,13 @@ describe('FFmpeg final video arguments', () => {
     expect(args).toContain('17');
   });
 
+  it('trims four four-second Premium ad clips to 2.5 seconds each before the two-second logo', () => {
+    const args = makeMultiClipMontageArgs({ shotFiles: ['/tmp/a.mp4', '/tmp/b.mp4', '/tmp/c.mp4', '/tmp/d.mp4'], shotDurations: [2.5, 2.5, 2.5, 2.5], logoFile: '/app/logo.png', outputFile: '/tmp/final.mp4', clipDurationSeconds: 10, finalDurationSeconds: 12 });
+    expect(args.join(' ')).toContain('trim=duration=2.5');
+    expect(args.join(' ')).toContain('trim=duration=10');
+    expect(args.slice(-3)).toEqual(['-t', '12', '/tmp/final.mp4']);
+  });
+
   it('overlays the RIMCO logo at the upper left and keeps the requested duration', () => {
     const args = makeFinalVideoArgs({ rawFile: '/tmp/raw.mp4', logoFile: '/app/public/brand/logo-rimco.png', outputFile: '/tmp/final.mp4', durationSeconds: 15, overlayLogo: true, audioFile: null, format: '9:16' });
     expect(args).toContain('/app/public/brand/logo-rimco.png');
@@ -122,6 +129,29 @@ describe('FFmpeg logo rendering', () => {
       expect((await stat(output)).size).toBeGreaterThan(0);
       const probe = run(['-hide_banner', '-i', output, '-f', 'null', '-']);
       expect(`${probe.stderr}`).toContain('Duration: 00:00:17.00');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  it('renders a Premium 10-second ad from four 4-second source clips trimmed to 2.5 seconds plus the logo', async () => {
+    const executable = ffmpegPath;
+    if (!executable) throw new Error('Le binaire FFmpeg de test est indisponible.');
+    const directory = await mkdtemp(join(tmpdir(), 'rimco-premium-ad-test-'));
+    const clips = Array.from({ length: 4 }, (_, index) => join(directory, `clip-${index + 1}.mp4`));
+    const output = join(directory, 'final.mp4');
+    const run = (args: string[]) => {
+      const result = spawnSync(executable, args, { encoding: 'utf8', timeout: 60_000 });
+      if (result.status !== 0) throw new Error(result.stderr || 'FFmpeg a échoué pendant le test Premium.');
+      return result;
+    };
+    try {
+      for (const [index, clip] of clips.entries()) {
+        run(['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x${['334455','445566','556677','667788'][index]}:s=320x180:r=24:d=4`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', clip]);
+      }
+      run(makeMultiClipMontageArgs({ shotFiles: clips, shotDurations: [2.5, 2.5, 2.5, 2.5], logoFile: join(process.cwd(), 'public/brand/logo-rimco.png'), outputFile: output, clipDurationSeconds: 10, finalDurationSeconds: 12, format: '16:9' }));
+      const probe = run(['-hide_banner', '-i', output, '-f', 'null', '-']);
+      expect(`${probe.stderr}`).toContain('Duration: 00:00:12.00');
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
