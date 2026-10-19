@@ -17,6 +17,50 @@ export const KEYFRAME_VIDEO_ENDPOINTS = {
 export const KEYFRAME_VIDEO_PRICES_USD_PER_SECOND = { wan720p: 0.10, kling: 0.112, seedance: 0.473 } as const;
 export type KeyframeQuality = { approved: boolean; issues: string[]; reason: string };
 
+type VehicleReference = { id: string; angle?: string | null; photo_role?: string | null };
+
+function normalizedView(value: string | null | undefined) {
+  return (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('fr');
+}
+
+export function selectKeyframeReferenceIds(input: {
+  primaryVehiclePhotoId: string;
+  vehiclePhotos: VehicleReference[];
+  locationPhotoId?: string | null;
+  maxReferences?: number;
+}) {
+  const maxReferences = Math.min(14, Math.max(1, input.maxReferences ?? 14));
+  const distinct = input.vehiclePhotos.filter((photo, index, all) => all.findIndex((candidate) => candidate.id === photo.id) === index);
+  const primary = distinct.find((photo) => photo.id === input.primaryVehiclePhotoId);
+  if (!primary) throw new Error('La photo principale doit faire partie des références véhicule validées.');
+  const candidates = distinct.filter((photo) => photo.id !== primary.id);
+  const angleKey = (photo: VehicleReference) => normalizedView(photo.angle);
+  const roleKey = (photo: VehicleReference) => normalizedView(photo.photo_role);
+  const uniqueAngles = candidates.filter((photo) => angleKey(photo) && angleKey(photo) !== angleKey(primary));
+  const selected = [primary, ...uniqueAngles];
+  const selectedIds = new Set(selected.map((photo) => photo.id));
+  for (const photo of candidates) {
+    if (!selectedIds.has(photo.id) && roleKey(photo) && !selected.some((chosen) => roleKey(chosen) === roleKey(photo))) {
+      selected.push(photo); selectedIds.add(photo.id);
+    }
+  }
+  for (const photo of candidates) if (!selectedIds.has(photo.id)) { selected.push(photo); selectedIds.add(photo.id); }
+  const vehicleSlots = Math.max(1, maxReferences - (input.locationPhotoId ? 1 : 0));
+  const selectedVehicle = selected.slice(0, vehicleSlots).map((photo) => photo.id);
+  return input.locationPhotoId && selectedVehicle.length < maxReferences
+    ? [...selectedVehicle, input.locationPhotoId]
+    : selectedVehicle;
+}
+
+export function buildKeyframeQualityPrompt(input: { vehicleReferenceCount: number; hasLocationReference: boolean }) {
+  const vehicleEnd = 1 + input.vehicleReferenceCount;
+  const vehicleRole = input.vehicleReferenceCount > 1
+    ? `images 2 to ${vehicleEnd} = approved views of the same exact vehicle`
+    : 'image 2 = approved base photo of the exact vehicle';
+  const locationRole = input.hasLocationReference ? `; image ${vehicleEnd + 1} = selected location` : '';
+  return `Compare references in this order: image 1 = candidate keyframe; ${vehicleRole}${locationRole}. Verify that the candidate preserves the same exact vehicle identity, color, visible details and selected location, and contains no added text or invented logo. Check only visible details; do not infer defects that cannot be seen. Approve only when no manifest mismatch is visible. Return compact JSON only.`;
+}
+
 const qualitySchema = z.object({
   approved: z.boolean(),
   issues: z.array(z.string().trim().min(1).max(160)).max(5),
@@ -42,9 +86,16 @@ export function buildKeyframePrompt(input: {
   lighting: string;
   format: string;
   retryReason: string | null;
+  vehicleReferenceCount?: number;
+  hasLocationReference?: boolean;
 }) {
   const retry = input.retryReason ? ` Correct these specific issues from the failed quality check: ${input.retryReason}.` : '';
-  return `Create one photorealistic, premium automotive advertising still photograph for a real commercial. Vehicle identity: ${input.vehicle}. The first supplied reference is the exact approved vehicle; preserve its make, model, silhouette, paint color, wheels, visible badges, proportions and equipment. The second supplied reference, when present, is the exact selected location; preserve its recognizable architecture, road layout and landmarks. Scene: ${input.shot.scene}. Location: ${input.shot.location}. Action at this precise instant: ${input.shot.action}. Framing: ${input.shot.framing}. Camera viewpoint: ${input.shot.camera}. Lighting: ${input.lighting}. Compose for ${input.format}. Keep the car naturally grounded in the scene with matching light direction, exposure, reflections, scale, contact shadow and road perspective. Show a plausible instant of real action, with restrained natural motion cues only where appropriate. Match a sophisticated live-action car commercial, elegant composition, realistic materials and subtle color grade. Use only the supplied vehicle and place references; do not invent vehicle details, landmarks, people or signs. No illustration, CGI appearance, extra vehicle, added logo, readable plate, watermark, caption or title; do not add text.${retry}`;
+  const vehicleReferenceCount = Math.max(1, input.vehicleReferenceCount ?? 1);
+  const referenceRoles = vehicleReferenceCount > 1
+    ? `The first supplied image is the exact approved vehicle base photo; preserve its framing and identity. The next ${vehicleReferenceCount - 1} images are additional views of the same exact vehicle; use them only to preserve identity details such as wheels, badges, grille, lights and proportions. Do not combine viewpoints, backgrounds or parts into a different vehicle.`
+    : 'The first supplied image is the exact approved vehicle base photo; preserve its make, model, silhouette, paint color, wheels, visible badges, proportions and equipment.';
+  const locationRole = input.hasLocationReference ? 'The final supplied image is the exact selected location; reproduce its recognizable architecture, road layout and landmarks without borrowing its lighting or objects as vehicle details.' : '';
+  return `Create one photorealistic, premium automotive advertising still photograph for a real commercial. Vehicle identity: ${input.vehicle}. ${referenceRoles} ${locationRole} Scene: ${input.shot.scene}. Location: ${input.shot.location}. Action at this precise instant: ${input.shot.action}. Framing: ${input.shot.framing}. Camera viewpoint: ${input.shot.camera}. Lighting: ${input.lighting}. Compose for ${input.format}. Keep the car naturally grounded in the scene with matching light direction, exposure, reflections, scale, contact shadow and road perspective. Show a plausible instant of real action, with restrained natural motion cues only where appropriate. Match a sophisticated live-action car commercial, elegant composition, realistic materials and subtle color grade. Use only the supplied vehicle and place references; do not invent vehicle details, landmarks, people or signs. No illustration, CGI appearance, extra vehicle, added logo, readable plate, watermark, caption or title; do not add text.${retry}`;
 }
 
 export function buildKeyframeAnimationPrompt(input: { shot: StoryboardShot; vehicle: string; durationS: number; mood: string; lighting: string }) {

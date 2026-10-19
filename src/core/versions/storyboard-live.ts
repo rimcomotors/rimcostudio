@@ -3,7 +3,7 @@ import { HttpError } from '@/core/auth/guards';
 import { buildBrief } from '@/core/brief';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider, safeProviderError, type ReferenceVideoProvider } from '@/core/providers/fal-reference-video';
-import { buildKeyframeAnimationPrompt, buildKeyframePrompt, canAnimateKeyframes, keyframeQualityAction, KEYFRAME_IMAGE_COST_USD, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
+import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQualityPrompt, canAnimateKeyframes, keyframeQualityAction, KEYFRAME_IMAGE_COST_USD, KEYFRAME_QUALITY_RESERVE_USD, KEYFRAME_VIDEO_ENDPOINTS, KEYFRAME_IMAGE_ENDPOINT, KEYFRAME_VISION_ENDPOINT, keyframeVideoProviders, readKeyframe, readKeyframeQuality, selectKeyframeReferenceIds, shouldGenerateKeyframes, submitKeyframe, submitKeyframeQuality } from '@/core/providers/fal-keyframes';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
@@ -124,6 +124,11 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   const locationsQuery = uploadedPlaceIds.length ? await authenticated.from('assets').select('id,path,title,kind,status,brand_id').in('id', uploadedPlaceIds).eq('kind', 'place').eq('status', 'validée').eq('brand_id', actor.brandId) : { data: [], error: null };
   if (locationsQuery.error || (locationsQuery.data ?? []).length !== uploadedPlaceIds.length) throw new HttpError(422, 'Un lieu sélectionné n’est plus disponible.');
   const placeAssets = [...curatedPlaces.map((place) => ({ id: place.id, path: place.path, title: place.title, kind: 'place' as const, status: 'validée' as const, brand_id: actor.brandId })), ...(locationsQuery.data ?? [])];
+  const requestedVehicleIds = new Set(input.vehiclePhotoIds);
+  const selectedVehiclePhotos = input.vehiclePhotoIds.length
+    ? vehiclePhotos.filter((photo) => requestedVehicleIds.has(photo.id))
+    : vehiclePhotos;
+  if (input.vehiclePhotoIds.length && selectedVehiclePhotos.length !== requestedVehicleIds.size) throw new HttpError(422, 'Une ou plusieurs vues sélectionnées du véhicule ne sont plus disponibles.');
   const validVehiclePhotoIds = new Set(vehiclePhotos.map((photo) => photo.id));
   const validPlaceIds = new Set(placeAssets.map((photo) => photo.id));
   if (generationShots.some((shot) => !validVehiclePhotoIds.has(shot.vehiclePhotoId) || shot.locationPhotoId != null && !validPlaceIds.has(shot.locationPhotoId))) {
@@ -131,6 +136,20 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
   }
 
   const vehicleDescription = [dossier.make, dossier.model, dossier.variant, dossier.color].filter((value): value is string => typeof value === 'string' && value.trim().length > 0).join(' ');
+  const keyframeReferencesByShot = keyframeMode ? generationShots.map((shot, index) => {
+    const referencePool = [
+      ...selectedVehiclePhotos,
+      ...vehiclePhotos.filter((photo) => !requestedVehicleIds.has(photo.id)),
+    ];
+    return {
+      shotNumber: index + 1,
+      assetIds: selectKeyframeReferenceIds({
+        primaryVehiclePhotoId: shot.vehiclePhotoId,
+        vehiclePhotos: referencePool.map((photo) => ({ id: photo.id, angle: photo.angle, photo_role: photo.photo_role })),
+        locationPhotoId: shot.locationPhotoId,
+      }),
+    };
+  }) : [];
   const brief = buildBrief(input.description || 'Vidéo automobile élégante à Abidjan.', {
     vehicle_asset_id: asset.id,
     vehicle_description: vehicleDescription || 'Véhicule strictement identique à la photo de référence',
@@ -164,7 +183,7 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
     department: actor.department, status: 'generating',
   }).select('id').single();
   if (videoError || !video) throw new HttpError(500, 'Impossible de créer la vidéo. Réessayez.');
-  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, placeIds: input.placeIds, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
+  const storedBrief = { ...brief, storyboard: generationShots, approvedStoryboard: input.storyboard, generationTier: input.storyMode, overlayLogo: input.overlayLogo, multiClipMode: !isSingleShot, singleStoryboardMode: isSingleShot, storyMode: input.storyMode, clipDurationSeconds: input.clipDurationSeconds, finalDurationSeconds: finalVideoSeconds(input.clipDurationSeconds), purpose: input.purpose, vehicleDossierId: input.vehicleDossierId, vehiclePhotoIds: selectedVehiclePhotos.map((photo) => photo.id), keyframeReferencesByShot, placeIds: input.placeIds, processingMetrics: { requestedAt: new Date().toISOString() }, shotProcessingMetrics: {}, ...(input.comparisonCampaignId ? { comparisonCampaignId: input.comparisonCampaignId } : {}) };
   const { data: version, error: versionError } = await admin.from('video_versions').insert({
     video_id: video.id, number: 1, brief_json: storedBrief, generated_prompt: prompts.join('\n\n--- Plan suivant ---\n\n'),
     ai_model_id: videoModel.id, fal_credential_id: falCredential.id, status: 'queued', generation_seconds: finalVideoSeconds(input.clipDurationSeconds),
@@ -267,12 +286,16 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
 
     const falStorage = createFalClient({ credentials: falCredential.apiKey }).storage;
     const uploads = new Map<string, Promise<string>>();
-    const keyframeSubmissions = await Promise.allSettled(generationShots.map(async (shot) => {
+    const keyframeSubmissions = await Promise.allSettled(generationShots.map(async (shot, index) => {
       const vehiclePhoto = vehiclePhotos.find((photo) => photo.id === shot.vehiclePhotoId);
       const place = placeAssets.find((photo) => photo.id === shot.locationPhotoId);
       if (!vehiclePhoto) throw new HttpError(422, 'Le storyboard utilise une photo de véhicule non validée.');
-      const imageUrls = await Promise.all([vehiclePhoto.path, ...(place ? [place.path] : [])].map((path) => resolveFalAssetUrl(path, admin, falStorage, uploads)));
-      const prompt = buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: brief.lighting, format: input.format, retryReason: null });
+      const referenceIds = keyframeReferencesByShot[index]?.assetIds ?? [vehiclePhoto.id, ...(place ? [place.id] : [])];
+      const references = referenceIds.map((id) => id === place?.id ? place : vehiclePhotos.find((photo) => photo.id === id)).filter((reference): reference is NonNullable<typeof reference> => Boolean(reference));
+      if (references.length !== referenceIds.length || references[0]?.id !== vehiclePhoto.id || place && references.at(-1)?.id !== place.id) throw new HttpError(422, 'L’ordre des références image-clé est invalide.');
+      const imageUrls = await Promise.all(references.map((reference) => resolveFalAssetUrl(reference.path, admin, falStorage, uploads)));
+      const vehicleReferenceCount = references.filter((reference) => reference.id !== place?.id).length;
+      const prompt = buildKeyframePrompt({ shot, vehicle: vehicleDescription, lighting: brief.lighting, format: input.format, retryReason: null, vehicleReferenceCount, hasLocationReference: Boolean(place) });
       return submitKeyframe({ prompt, imageUrls, aspectRatio: input.format }, falCredential.apiKey);
     }));
     let submittedKeyframes = 0;
@@ -390,8 +413,16 @@ async function refreshKeyframes(input: {
   if (!anyKeyframes) return null;
   if (canAnimateKeyframes(shots.map((shot) => String(shot.keyframe_status))) && shots.some((shot) => typeof shot.provider_request_id === 'string')) return null;
 
-  const vehicleIds = [...new Set(shotDrafts.map((shot) => shot.vehiclePhotoId))];
+  const persistedReferences = Array.isArray(brief.keyframeReferencesByShot)
+    ? brief.keyframeReferencesByShot as Array<{ shotNumber: number; assetIds: string[] }>
+    : [];
+  const referenceByShot = new Map(persistedReferences.map((entry) => [entry.shotNumber, entry.assetIds]));
   const selectedPlaceIds = shotDrafts.map((shot) => shot.locationPhotoId).filter((id): id is string => Boolean(id));
+  const legacyVehicleIds = shotDrafts.map((shot) => shot.vehiclePhotoId);
+  const vehicleIds = [...new Set([
+    ...legacyVehicleIds,
+    ...persistedReferences.flatMap((entry) => entry.assetIds).filter((id) => !selectedPlaceIds.includes(id)),
+  ])];
   const curatedLocations = selectedPlaceIds.map(findCuratedLocation).filter((place) => place !== undefined);
   const curatedIds = new Set<string>(curatedLocations.map((place) => place.id));
   const uploadedPlaceIds = [...new Set(selectedPlaceIds.filter((id) => !curatedIds.has(id)))];
@@ -415,9 +446,18 @@ async function refreshKeyframes(input: {
     if (activeKeyframePoll && (!isFalPollDue(shot.provider_next_poll_at) || Number(shot.provider_poll_failure_count ?? 0) >= 4)) return;
     if (!draft || imageLedgerIds.length !== 2 || qualityLedgerIds.length !== 2) throw new HttpError(503, `Le suivi de l’image-clé ${shotNumber} est incomplet.`);
     const vehicle = assetsById.get(draft.vehiclePhotoId);
+    const persistedAssetIds = referenceByShot.get(shotNumber);
+    const referenceIds = persistedAssetIds?.length ? persistedAssetIds : [draft.vehiclePhotoId, ...(draft.locationPhotoId ? [draft.locationPhotoId] : [])];
+    const vehicleReferenceIds = referenceIds.filter((id) => id !== draft.locationPhotoId);
     const placePath = draft.locationPhotoId ? locationPaths.get(draft.locationPhotoId) ?? assetsById.get(draft.locationPhotoId)?.path : undefined;
     if (!vehicle || !placePath && draft.locationPhotoId) throw new HttpError(422, `Une référence du plan ${shotNumber} n’est plus disponible.`);
-    const referenceUrls = await Promise.all([vehicle.path, ...(placePath ? [placePath] : [])].map((path) => resolveFalAssetUrl(path, admin, falStorage, uploads)));
+    if (vehicleReferenceIds[0] !== draft.vehiclePhotoId || draft.locationPhotoId && referenceIds.at(-1) !== draft.locationPhotoId) throw new HttpError(422, `L’ordre des références mémorisées du plan ${shotNumber} est invalide.`);
+    const referencePaths = referenceIds.map((id) => id === draft.locationPhotoId
+      ? placePath
+      : assetsById.get(id)?.path);
+    if (referencePaths.some((path) => !path)) throw new HttpError(422, `Une vue validée du véhicule du plan ${shotNumber} n’est plus accessible.`);
+    const referenceUrls = await Promise.all(referencePaths.map((path) => resolveFalAssetUrl(path!, admin, falStorage, uploads)));
+    const vehicleReferenceCount = vehicleReferenceIds.length;
     const imageLedgerId = imageLedgerIds[attempt];
     const qualityLedgerId = qualityLedgerIds[attempt];
     if (shot.keyframe_status === 'generating' && typeof shot.keyframe_request_id === 'string') {
@@ -460,7 +500,7 @@ async function refreshKeyframes(input: {
       }
       const { data: signed, error: signedError } = await admin.storage.from(target.bucket).createSignedUrl(target.path, 3600);
       if (signedError || !signed?.signedUrl) throw new HttpError(503, 'Impossible de créer le lien de contrôle temporaire.');
-      const visionPrompt = `Compare les images reçues dans cet ordre : image 1 = candidat image-clé, image 2 = véhicule approuvé, image 3 éventuelle = lieu sélectionné. Le candidat doit conserver strictement le véhicule et sa couleur visibles dans la référence; respecter le lieu et la composition demandés; ne contenir aucun texte ajouté, logo inventé ni plaque lisible. Vérifie aussi une lumière et une échelle plausibles. Réponds avec approved=true seulement si aucun défaut manifeste. Sinon liste précisément les défauts. Plan: ${draft.title}; scène: ${draft.scene}; cadrage: ${draft.framing}; lieu: ${draft.location}.`;
+      const visionPrompt = `${buildKeyframeQualityPrompt({ vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId) })} Plan: ${draft.title}; scène: ${draft.scene}; cadrage: ${draft.framing}; lieu: ${draft.location}.`;
       let qualityJob: { requestId: string };
       try {
         qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signed.signedUrl, ...referenceUrls] }, apiKey);
@@ -529,7 +569,7 @@ async function refreshKeyframes(input: {
     }
     if (qualityAction === 'retry') {
       const vehicleDescription = String(brief.vehicle_description ?? 'Véhicule fidèle à la photo validée');
-      const prompt = buildKeyframePrompt({ shot: draft, vehicle: vehicleDescription, lighting: String(brief.lighting ?? ''), format: String(brief.format ?? '16:9'), retryReason: quality.issues.join('; ') || quality.reason });
+      const prompt = buildKeyframePrompt({ shot: draft, vehicle: vehicleDescription, lighting: String(brief.lighting ?? ''), format: String(brief.format ?? '16:9'), retryReason: quality.issues.join('; ') || quality.reason, vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId) });
       let retryRequestId: string | null = null;
       try {
         const retryJob = await submitKeyframe({ prompt, imageUrls: referenceUrls, aspectRatio: String(brief.format ?? '16:9') }, apiKey);

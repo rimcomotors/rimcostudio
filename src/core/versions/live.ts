@@ -20,6 +20,7 @@ import { calculateClientPriceFcfa } from '@/core/pricing';
 import { refreshLiveStoryboard } from './storyboard-live';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { reserveGenerationCost, reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
+import { llmReservationUsd } from '@/core/providers/fal-llm';
 import { getRouteForGeneration, REFERENCE_MODEL_ENDPOINTS } from '@/core/providers/model-routing';
 import { wanReferenceVideoProvider, klingReferenceVideoProvider, seedanceReferenceVideoProvider } from '@/core/providers/fal-reference-video';
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
@@ -143,7 +144,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     throw new HttpError(503, 'Impossible de réserver le suivi de coûts de la génération.');
   }
 
-  const llmReserveUsd = 2 * (env.LLM_MAX_COST_USD ?? 0);
+  const llmReserveUsd = llmReservationUsd(env.LLM_MAX_COST_USD ?? 0);
   let brief: Brief;
   let prompt: string;
   if (options?.reuse) {

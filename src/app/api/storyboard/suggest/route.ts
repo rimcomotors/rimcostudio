@@ -6,7 +6,7 @@ import { createStorageAdminClient } from '@/core/storage/supabase';
 import { env } from '@/env';
 import { buildSingleShotStoryboardInstruction, buildStoryboardInstruction, fitStoryboardDurations, getSingleShotClipDurations, singleShotStoryboardSchema, storyboardSchema, validateSingleShotStoryboard, validateStoryboard, type ClipDurationSeconds, type StoryboardShot } from '@/core/storyboard';
 import { getStoryboardModeRoute } from '@/core/providers/storyboard-routing';
-import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError } from '@/core/providers/fal-llm';
+import { buildFalLlmInput, createFalLlmProvider, FalLlmBriefError, llmReservationUsd } from '@/core/providers/fal-llm';
 import { createFalClient } from '@fal-ai/client';
 import { getActiveFalCredential } from '@/core/providers/fal-credential-vault';
 import { reserveLlmCost, settleUsageCost } from '@/core/billing/ledger';
@@ -124,7 +124,7 @@ export async function POST(request: Request) {
       falApiKeyForRedaction = falCredential.apiKey;
       const { data: videoModel } = await admin.from('ai_models').select('price_usd_per_second').eq('fal_endpoint_id', route.endpoint).eq('is_active', true).maybeSingle();
       const { data: reservation, error: reservationError } = await reserveLlmCost(admin, {
-        userId: actor.id, department: actor.department, maxCostUsd: 0.02,
+        userId: actor.id, department: actor.department, maxCostUsd: llmReservationUsd(env.LLM_MAX_COST_USD ?? 0),
         usdToEur: env.USD_TO_EUR_RATE, eurToFcfa: env.EUR_TO_FCFA,
       });
       if (reservationError || !reservation) throw new HttpError(503, 'Impossible de réserver le coût de préparation du storyboard.');
@@ -141,7 +141,7 @@ export async function POST(request: Request) {
             }));
         const result = await provider.buildStoryboardWithCost(instruction, responseSchema, 'You are an expert automotive commercial director. Return only JSON matching the requested schema. Use French for all creative text.');
         shots = result.fields.shots;
-        storyboardCostUsd = result.costUsd ?? 0.02;
+        storyboardCostUsd = result.costUsd ?? (env.LLM_MAX_COST_USD ?? 0) * result.completedRequests;
         if (videoModel) {
           const generationSeconds = input.workflow === 'single'
             ? getSingleShotClipDurations(input.durationSeconds as ClipDurationSeconds, route.adapterFamily).reduce((sum, seconds) => sum + seconds, 0)
@@ -154,7 +154,7 @@ export async function POST(request: Request) {
       } catch (cause) {
         const failedLlm = cause instanceof FalLlmBriefError ? cause : null;
         const actualFailureCostUsd = failedLlm
-          ? failedLlm.reportedCostUsd ?? (failedLlm.completedRequests > 0 ? 0.02 : 0)
+          ? failedLlm.reportedCostUsd ?? (failedLlm.completedRequests * (env.LLM_MAX_COST_USD ?? 0))
           : storyboardCostUsd;
         const { error: settlementError } = await settleUsageCost(admin, {
           entryId: reservation,

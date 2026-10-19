@@ -6,6 +6,11 @@ import type { Brief } from '@/core/brief';
 import type { LlmProvider } from './contracts';
 
 export const FAL_LLM_ENDPOINT = 'openrouter/router';
+export const FAL_LLM_MAX_ATTEMPTS = 2;
+export function llmReservationUsd(maxCostPerAttempt: number) {
+  if (!Number.isFinite(maxCostPerAttempt) || maxCostPerAttempt <= 0) throw new Error('Le plafond de coût LLM par tentative doit être positif.');
+  return maxCostPerAttempt * FAL_LLM_MAX_ATTEMPTS;
+}
 export class FalLlmBriefError extends Error {
   constructor(
     message: string,
@@ -90,7 +95,7 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
   let costUsd = 0;
   let hasReportedCost = false;
   let completedRequests = 0;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < FAL_LLM_MAX_ATTEMPTS; attempt += 1) {
     const request = attempt === 0 ? prompt : `${prompt}\n\nCorrection obligatoire : la réponse précédente était incomplète ou invalide. Retourne un JSON compact et complet, sans raisonnement (no reasoning), commentaire, préambule ni Markdown. Garde les valeurs textuelles très courtes, respecte strictement le schéma et ses limites, conserve les identifiants fournis à l’identique, et ferme toutes les chaînes et accolades.`;
     let response: unknown;
     try { response = await call(request, instructions); }
@@ -102,7 +107,7 @@ async function validatedFields<T>(call: LlmCall, prompt: string, schema: z.ZodTy
     if (incompleteIssue) { lastIssue = incompleteIssue; continue; }
     try {
       const fieldsResult = schema.safeParse(parseJson(outputText(response)));
-      if (fieldsResult.success) return { fields: fieldsResult.data, costUsd: hasReportedCost ? costUsd : null };
+      if (fieldsResult.success) return { fields: fieldsResult.data, costUsd: hasReportedCost ? costUsd : null, completedRequests };
       lastIssue = fieldsResult.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ');
     } catch (error) { lastIssue = error instanceof Error ? error.message : 'Réponse invalide.'; }
   }
@@ -125,7 +130,7 @@ export function createFalLlmProvider(call: LlmCall) {
       const selectedOptions = Object.fromEntries(Object.entries(options).filter(([key, value]) => key === 'vehicle_asset_id' || key === 'vehicle_description' || value.trim().length > 0));
       return { brief: briefSchema.parse({ vehicle_asset_id: options.vehicle_asset_id || 'mock-vehicle', vehicle_description: options.vehicle_description || description, ...generated.fields, ...selectedOptions, duration_s: Number(options.duration_s ?? 5) }), costUsd: generated.costUsd };
     },
-    async buildStoryboardWithCost<T>(prompt: string, schema: z.ZodType<T>, instructions: string): Promise<{ fields: T; costUsd: number | null }> { return validatedFields(call, prompt, schema, instructions); },
+    async buildStoryboardWithCost<T>(prompt: string, schema: z.ZodType<T>, instructions: string): Promise<{ fields: T; costUsd: number | null; completedRequests: number }> { return validatedFields(call, prompt, schema, instructions); },
   } satisfies LlmProvider & {
     buildBriefWithCost(description: string, options: Record<string, string>): Promise<{ brief: Brief; costUsd: number | null }>;
     buildStoryboardWithCost<T>(prompt: string, schema: z.ZodType<T>, instructions: string): Promise<{ fields: T; costUsd: number | null }>;

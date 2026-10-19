@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { buildFalLlmInput, createFalLlmProvider } from './fal-llm';
+import { buildFalLlmInput, createFalLlmProvider, llmReservationUsd } from './fal-llm';
 
 const generated = {
   location: 'Abidjan', setting: 'architecture contemporaine', character: 'conductrice naturelle',
@@ -8,6 +8,9 @@ const generated = {
 };
 
 describe('fal LLM brief adapter', () => {
+  it('reserves one configured maximum for each of the two possible LLM attempts', () => {
+    expect(llmReservationUsd(0.05)).toBe(0.1);
+  });
   it('uses the provider-compatible reasoning setting and allows enough tokens for a complete storyboard', () => {
     expect(buildFalLlmInput('brief', 'system', 'anthropic/claude-sonnet-5.5')).toEqual({
       prompt: 'brief', system_prompt: 'system', model: 'anthropic/claude-sonnet-5.5',
@@ -21,11 +24,18 @@ describe('fal LLM brief adapter', () => {
       .mockResolvedValueOnce({ data: { output: JSON.stringify({ shots: [] }), partial: false, usage: { cost: 0.01 } } });
     const schema = z.object({ shots: z.array(z.string()) });
     const result = await createFalLlmProvider(call).buildStoryboardWithCost('brief', schema, 'JSON only');
-    expect(result).toMatchObject({ fields: { shots: [] }, costUsd: 0.02 });
+    expect(result).toMatchObject({ fields: { shots: [] }, costUsd: 0.02, completedRequests: 2 });
     expect(call).toHaveBeenCalledTimes(2);
     expect(call.mock.calls[1][0]).toContain('Correction obligatoire');
     expect(call.mock.calls[1][0]).toContain('compact');
     expect(call.mock.calls[1][0]).toContain('reasoning');
+  });
+
+  it('reports the number of provider calls when usage is unavailable', async () => {
+    const call = vi.fn().mockResolvedValue({ output: '{"shots":[]}' });
+    const schema = z.object({ shots: z.array(z.string()) }).strict();
+    const result = await createFalLlmProvider(call).buildStoryboardWithCost('brief', schema, 'JSON only');
+    expect(result).toMatchObject({ costUsd: null, completedRequests: 1 });
   });
 
   it('extracts a complete JSON object surrounded by model prose or a markdown fence', async () => {

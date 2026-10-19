@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { vehicleCategories } from '@/core/scenes/catalog';
+import { MAX_STORYBOARD_DIRECTION_LENGTH } from '@/core/storyboard-direction';
 
 export const briefSchema = z.object({
   vehicle_asset_id: z.string().min(1),
@@ -7,7 +8,7 @@ export const briefSchema = z.object({
   vehicle_category: z.enum(vehicleCategories).default('autre'),
   scene_preset_id: z.string().trim().max(100).default(''),
   vehicle_action: z.string().trim().max(160).default('Le véhicule avance lentement et régulièrement'),
-  user_direction: z.string().trim().max(500).default(''),
+  user_direction: z.string().trim().max(MAX_STORYBOARD_DIRECTION_LENGTH).default(''),
   creative_direction: z.string().trim().max(500).default(''),
   location: z.string().trim().max(160).default(''),
   setting: z.string().trim().max(160).default(''),
