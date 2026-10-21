@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatElapsed, formatStageDurations, type StageDurations } from './processing-display';
+import { isGenerationActive, nextGenerationPollDelayMs, shouldPollGenerationQueue } from '@/core/versions/client-polling';
 
 type Item = { id: string; title?: string; status: string; versionStatus?: string | null; processingStage?: string; stageElapsedSeconds?: number | null; processingDurations?: StageDurations; durationSeconds?: number; checkedQualityShots?: number; totalQualityShots?: number; createdAt?: string; errorMessage?: string | null; pollError?: string | null; canRetryTracking?: boolean; reconciliationRequired?: boolean };
 const steps = ['queued', 'keyframing', 'generating', 'quality_checking', 'transferring', 'postprocessing', 'ready'];
@@ -11,31 +12,53 @@ export function GenerationQueue() {
   const [items, setItems] = useState<Item[]>([]);
   const [error, setError] = useState('');
   const loading = useRef(false);
+  const itemsRef = useRef<Item[]>([]);
+  const nextPollAt = useRef(0);
   const load = useCallback(async () => {
     if (loading.current) return;
     loading.current = true;
     try {
-      const response = await fetch('/api/versions', { cache: 'no-store' });
+      const response = await fetch('/api/versions?includePreviews=false', { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'Impossible de charger la file.');
       let versions = (data.versions ?? []) as Item[];
-      const pending = versions.filter((item) => ['generating', 'queued'].includes(item.status) || ['queued', 'generating', 'postprocessing'].includes(item.versionStatus ?? ''));
+      const pending = versions.filter(isGenerationActive);
       let refreshFailed = false;
       if (pending.length > 0) {
         const results = await Promise.all(pending.map(async (item) => {
-          try { return (await fetch(`/api/versions/${item.id}/refresh`, { cache: 'no-store', signal: AbortSignal.timeout(25_000) })).ok; }
-          catch { return false; }
+          try {
+            const response = await fetch(`/api/versions/${item.id}/refresh`, { cache: 'no-store', signal: AbortSignal.timeout(25_000) });
+            const data = await response.json().catch(() => ({})) as { nextPollInSeconds?: unknown };
+            return { ok: response.ok, nextPollInSeconds: data.nextPollInSeconds };
+          } catch { return { ok: false, nextPollInSeconds: undefined }; }
         }));
-        refreshFailed = results.some((ok) => !ok);
-        const refreshedResponse = await fetch('/api/versions', { cache: 'no-store' });
+        refreshFailed = results.some((result) => !result.ok);
+        nextPollAt.current = Date.now() + nextGenerationPollDelayMs(results.map((result) => result.nextPollInSeconds));
+        const refreshedResponse = await fetch('/api/versions?includePreviews=false', { cache: 'no-store' });
         const refreshedData = await refreshedResponse.json();
         if (refreshedResponse.ok) versions = refreshedData.versions ?? [];
       }
-      setItems(versions.filter((item) => ['generating', 'queued'].includes(item.status) || ['queued', 'generating', 'postprocessing', 'failed'].includes(item.versionStatus ?? '')));
+      const nextItems = versions.filter((item) => ['generating', 'queued'].includes(item.status) || ['queued', 'generating', 'postprocessing', 'failed'].includes(item.versionStatus ?? ''));
+      itemsRef.current = nextItems;
+      setItems(nextItems);
       setError(refreshFailed ? 'Certaines mises à jour n’ont pas abouti. Les autres tâches restent suivies automatiquement.' : '');
     } finally { loading.current = false; }
   }, []);
-  useEffect(() => { void load().catch((cause) => setError(cause instanceof Error ? cause.message : 'Une erreur est survenue.')); const timer = window.setInterval(() => { void load().catch((cause) => setError(cause instanceof Error ? cause.message : 'Le suivi de génération est momentanément indisponible.')); }, 15_000); return () => window.clearInterval(timer); }, [load]);
+  useEffect(() => {
+    void load().catch((cause) => setError(cause instanceof Error ? cause.message : 'Une erreur est survenue.'));
+    const refreshIfNeeded = () => {
+      if (!shouldPollGenerationQueue(itemsRef.current, document.visibilityState === 'visible')) return;
+      if (Date.now() < nextPollAt.current) return;
+      nextPollAt.current = Date.now() + nextGenerationPollDelayMs([]);
+      void load().catch((cause) => setError(cause instanceof Error ? cause.message : 'Le suivi de génération est momentanément indisponible.'));
+    };
+    const timer = window.setInterval(refreshIfNeeded, 5_000);
+    document.addEventListener('visibilitychange', refreshIfNeeded);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshIfNeeded);
+    };
+  }, [load]);
   async function cancel(item: Item) {
     const response = await fetch(`/api/versions/${item.id}/cancel`, { method: 'POST' });
     const data = await response.json();

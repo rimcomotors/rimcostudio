@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { StatusPill } from '@/components/shell';
 import type { Role } from '@/core/auth/guards';
+import { preservePreviewUrl } from '@/core/storage/preview-cache';
 import { generationTierLabel } from '@/core/versions/generation-tier';
+import { nextGenerationPollDelayMs } from '@/core/versions/client-polling';
 
 type Video = { id: string; videoId?: string; title?: string; make?: string; model?: string; status: string; tier?: string | null; photoFidelity?: boolean; format?: string; durationSeconds?: number; checkedQualityShots?: number; totalQualityShots?: number; createdAt?: string; created_at?: string; estimatedPriceFcfa?: number; price_fcfa?: number; priceFcfa?: number; videoUrl?: string | null; previewUrl?: string | null; previewSource?: 'final' | 'raw' | null; finalUrl?: string; validationId?: string | null; validationStatus?: string | null; version?: number; department?: string; userId?: string; processingStage?: 'queued' | 'keyframing' | 'generating' | 'quality_checking' | 'transferring' | 'postprocessing' | 'ready' | 'failed'; stageElapsedSeconds?: number | null; processingDurations?: { queueSeconds: number | null; keyframingSeconds?: number | null; generationSeconds: number | null; transferSeconds: number | null; postproductionSeconds: number | null; billingSeconds: number | null } };
 
@@ -51,30 +53,27 @@ export function VideoLibrary({ role }: { role: Role }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deleting, setDeleting] = useState(false);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null);
+  const videosRef = useRef<Video[]>([]);
   const [unavailablePreviewIds, setUnavailablePreviewIds] = useState<string[]>([]);
   const renewedPreviewIds = useRef(new Set<string>());
   const refreshing = useRef(false);
+  const nextPollAt = useRef(0);
   const [refreshIssues, setRefreshIssues] = useState(false);
 
-  const loadVideos = useCallback(async (renewPreviewIds: ReadonlySet<string> = new Set()) => {
-    const response = await fetch('/api/versions');
+  const loadVideos = useCallback(async (includePreviews = true, renewPreviewIds: ReadonlySet<string> = new Set()) => {
+    const response = await fetch(`/api/versions${includePreviews ? '' : '?includePreviews=false'}`, { cache: 'no-store' });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error ?? 'Impossible de charger la bibliothèque.');
     const incoming = (data.versions ?? []) as Video[];
-    setVideos((current) => {
-      const existing = new Map(current.map((video) => [video.id, video]));
-      return incoming.map((video) => {
-        const previous = existing.get(video.id);
-        const keepPreview = previous?.previewUrl && previous.previewSource === video.previewSource && !renewPreviewIds.has(video.id);
-        return keepPreview ? { ...video, previewUrl: previous.previewUrl } : video;
-      });
-    });
+    const existing = new Map(videosRef.current.map((video) => [video.id, video]));
+    const nextVideos = incoming.map((video) => preservePreviewUrl(video, existing.get(video.id), renewPreviewIds));
+    videosRef.current = nextVideos;
+    setVideos(nextVideos);
     setSelectedVideo((current) => {
       if (!current) return null;
       const updated = incoming.find((video) => (video.videoId ?? video.id) === (current.videoId ?? current.id));
       if (!updated) return null;
-      const keepPreview = current.previewUrl && current.previewSource === updated.previewSource && !renewPreviewIds.has(current.id);
-      return keepPreview ? { ...updated, previewUrl: current.previewUrl } : updated;
+      return preservePreviewUrl(updated, current, renewPreviewIds);
     });
     const visibleIds = new Set(incoming.map((video: Video) => video.videoId ?? video.id));
     setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));
@@ -87,7 +86,7 @@ export function VideoLibrary({ role }: { role: Role }) {
     }
     renewedPreviewIds.current.add(versionId);
     try {
-      await loadVideos(new Set([versionId]));
+      await loadVideos(true, new Set([versionId]));
     } catch (cause) {
       setUnavailablePreviewIds((current) => current.includes(versionId) ? current : [...current, versionId]);
       setError(cause instanceof Error ? cause.message : 'Impossible de renouveler le lien de lecture.');
@@ -100,24 +99,34 @@ export function VideoLibrary({ role }: { role: Role }) {
 
   useEffect(() => { loadVideos().catch((cause) => setError(cause instanceof Error ? cause.message : 'Une erreur est survenue.')); }, [loadVideos]);
   useEffect(() => {
-    if (!videos.some((video) => video.status === 'generating')) return;
-    const timer = window.setInterval(async () => {
+    const refreshIfNeeded = async () => {
+      if (document.visibilityState !== 'visible') return;
+      const pending = videosRef.current.filter((video) => isVideoInProgress(video.status));
+      if (!pending.length) return;
+      if (Date.now() < nextPollAt.current) return;
       if (refreshing.current) return;
       refreshing.current = true;
-      const pending = videos.filter((video) => video.status === 'generating');
+      nextPollAt.current = Date.now() + nextGenerationPollDelayMs([]);
       try {
         const results = await Promise.all(pending.map(async (video) => {
           const response = await fetch(`/api/versions/${video.id}/refresh`, { cache: 'no-store', signal: AbortSignal.timeout(25_000) });
-          return response.ok;
+          const data = await response.json().catch(() => ({})) as { nextPollInSeconds?: unknown };
+          return { ok: response.ok, nextPollInSeconds: data.nextPollInSeconds };
         }));
-        setRefreshIssues(results.some((ok) => !ok));
-        await loadVideos();
+        setRefreshIssues(results.some((result) => !result.ok));
+        nextPollAt.current = Date.now() + nextGenerationPollDelayMs(results.map((result) => result.nextPollInSeconds));
+        await loadVideos(false);
       } catch {
         setRefreshIssues(true);
       } finally { refreshing.current = false; }
-    }, 15_000);
-    return () => window.clearInterval(timer);
-  }, [loadVideos, videos]);
+    };
+    const timer = window.setInterval(() => { void refreshIfNeeded(); }, 30_000);
+    document.addEventListener('visibilitychange', refreshIfNeeded);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshIfNeeded);
+    };
+  }, [loadVideos]);
 
   const filtered = useMemo(() => videos.filter((video) =>
     (filter === 'all' || video.status === filter) && `${video.title ?? ''} ${video.make ?? ''} ${video.model ?? ''}`.toLowerCase().includes(query.toLowerCase()),

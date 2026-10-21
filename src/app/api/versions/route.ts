@@ -61,7 +61,9 @@ const photoFidelitySchema = requestSchema.extend({
 export async function GET(request: Request) {
   try {
     const actor = await getActor();
-    const requestedStatus = new URL(request.url).searchParams.get('status');
+    const queryParams = new URL(request.url).searchParams;
+    const requestedStatus = queryParams.get('status');
+    const includePreviews = queryParams.get('includePreviews') !== 'false';
     if (env.PROVIDERS_MODE === 'mock' && !env.NEXT_PUBLIC_SUPABASE_URL) {
       const records = allVersions().filter((item) => item.userId === actor.id || actor.role === 'admin');
       const versions = records.map((latest) => {
@@ -109,10 +111,10 @@ export async function GET(request: Request) {
       const finalPath = latest?.final_path ?? null;
       const rawPath = latest?.raw_path ?? null;
       const storage = admin.storage.from('videos');
-      if (canPreview && isPersistedMock && (finalPath || rawPath)) {
+      if (includePreviews && canPreview && isPersistedMock && (finalPath || rawPath)) {
         previewUrl = '/mock/mock-video.mp4';
         previewSource = finalPath ? 'final' : 'raw';
-      } else if (canPreview) {
+      } else if (includePreviews && canPreview) {
         const previewPaths = [
           ...(finalPath ? [{ path: finalPath, source: 'final' as const }] : []),
           ...(rawPath && rawPath !== finalPath ? [{ path: rawPath, source: 'raw' as const }] : []),
@@ -125,15 +127,15 @@ export async function GET(request: Request) {
           break;
         }
       }
-      if (video.status === 'approved' && finalPath) {
+      if (includePreviews && video.status === 'approved' && finalPath) {
         videoUrl = await createSignedVideoDownloadUrl((storagePath, expiresIn, options) => storage.createSignedUrl(storagePath, expiresIn, options), finalPath);
       }
-      if (video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
+      if (includePreviews && video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
       const metrics = briefData.processingMetrics && typeof briefData.processingMetrics === 'object' ? briefData.processingMetrics as ProcessingMetrics : {};
       const stage = qualityCheckActive ? 'quality_checking' : processingStage(latest?.status ?? status, metrics);
       const stageStartedAt = stage === 'queued' ? metrics.providerSubmittedAt : stage === 'keyframing' ? metrics.keyframingStartedAt : stage === 'generating' ? metrics.generationStartedAt ?? metrics.providerSubmittedAt : stage === 'transferring' ? metrics.providerCompletedAt : stage === 'postprocessing' ? metrics.postproductionStartedAt : undefined;
-      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, videoUrl, previewUrl, previewSource, createdAt: video.created_at, department: video.department, userId: video.user_id };
+      return { id: latest?.id ?? video.id, videoId: video.id, title: video.title, status, workflow: briefData.multiClipMode === true ? 'multi_clip' : 'single', tier: generationTier, photoFidelity: isPhotoFidelity, format: typeof briefData.format === 'string' ? briefData.format : '16:9', durationSeconds: Number(latest?.generation_seconds ?? generationCost?.seconds ?? 5), version: latest?.number ?? 1, versionStatus: latest?.status ?? null, errorMessage: latest?.error_message ?? null, pollError, canRetryTracking, reconciliationRequired, checkedQualityShots, totalQualityShots, shotProgress, processingStage: stage, stageElapsedSeconds: elapsedSeconds(stageStartedAt), processingDurations: processingDurations(metrics, latest?.status ?? status), processingMetrics: metrics, priceFcfa: generationCost?.priceFcfa ?? (typeof mockMetadata.priceFcfa === 'number' ? mockMetadata.priceFcfa : null), validationId: validationRows[0]?.id ?? null, validationStatus: validationRows[0]?.status ?? null, prompt: latest?.generated_prompt ?? null, ...(includePreviews ? { videoUrl, previewUrl, previewSource } : {}), createdAt: video.created_at, department: video.department, userId: video.user_id };
     }));
     return NextResponse.json({ versions: requestedStatus ? versions.filter((version) => version.status === requestedStatus) : versions });
   } catch (error) { return errorResponse(error); }
