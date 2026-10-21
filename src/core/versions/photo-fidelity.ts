@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { Actor } from '@/core/auth/guards';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { serverVideoObjects } from '@/core/storage/server-video-objects';
 import { findCuratedLocation, locationCatalog } from '@/core/assets/location-catalog';
 import { hasTransparentPngPixels } from '@/core/postproduction/photo-fidelity';
 import { renderPhotoFidelityMontage } from '@/core/postproduction/pipeline';
@@ -136,13 +137,14 @@ export async function refreshLivePhotoFidelity(versionId: string, actor: Actor) 
     const output = await renderPhotoFidelityMontage({ shots: renderedShots, clipDurationSeconds: duration, format });
     if (output.length > MAX_VIDEO_BYTES) throw new HttpError(502, 'La vidéo finale dépasse la taille autorisée.');
     const finalPath = `${version.video_id}/${versionId}/photo-fidelity.mp4`;
-    const { error: uploadError } = await admin.storage.from('videos').upload(finalPath, output, { contentType: 'video/mp4', upsert: true });
-    if (uploadError) throw new HttpError(502, 'Impossible d’enregistrer le montage dans le stockage sécurisé.');
-    const { error: versionUpdateError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, error_message: null, updated_at: new Date().toISOString() }).eq('id', versionId);
+    let storedFinalPath: string;
+    try { storedFinalPath = await serverVideoObjects(admin).uploadFinal(finalPath, output); }
+    catch { throw new HttpError(502, 'Impossible d’enregistrer le montage dans le stockage sécurisé.'); }
+    const { error: versionUpdateError } = await admin.from('video_versions').update({ status: 'ready', final_path: storedFinalPath, error_message: null, updated_at: new Date().toISOString() }).eq('id', versionId);
     if (versionUpdateError) throw new HttpError(503, 'Le fichier est enregistré; son état doit être réconcilié.');
     const { error: videoUpdateError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (videoUpdateError) throw new HttpError(503, 'Le montage est prêt; son état doit être réconcilié.');
-    return { id: versionId, status: 'ready' as const, videoUrl: await signedUrl(admin, finalPath), totalShots: shots.length, fidelityStatus: 'Photos sources conservées; SSIM non mesuré automatiquement.' };
+    return { id: versionId, status: 'ready' as const, videoUrl: await signedUrl(admin, storedFinalPath), totalShots: shots.length, fidelityStatus: 'Photos sources conservées; SSIM non mesuré automatiquement.' };
   } catch (cause) {
     const message = cause instanceof HttpError ? cause.message : 'Le montage photo a échoué.';
     await Promise.all([
@@ -185,7 +187,6 @@ function findCuratedLocationByPath(path: string) {
 }
 
 async function signedUrl(admin: ReturnType<typeof createStorageAdminClient>, path: string) {
-  const { data, error } = await admin.storage.from('videos').createSignedUrl(path, 3600);
-  if (error || !data) throw new HttpError(503, 'Impossible de créer le lien temporaire du montage.');
-  return data.signedUrl;
+  try { return await serverVideoObjects(admin).createReadUrl(path, { expiresIn: 3600 }); }
+  catch { throw new HttpError(503, 'Impossible de créer le lien temporaire du montage.'); }
 }

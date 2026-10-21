@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { serverVideoObjects } from '@/core/storage/server-video-objects';
 import { makeFinalVideoArgs, makeMultiClipMontageArgs, makePhotoFidelityShotArgs, makeShotMontageArgs, normalizeVideoFormat, shouldOverlayLogo, type VideoFormat } from './ffmpeg-args';
 import { firstObservedAt, type ProcessingMetrics } from '@/core/versions/processing-metrics';
 
@@ -66,8 +67,10 @@ export async function beginPostproduction(versionId: string) {
     validateMp4(output);
 
     const finalPath = `${version.video_id}/${versionId}/final.mp4`;
-    const { error: uploadError } = await admin.storage.from('videos').upload(finalPath, output, { contentType: 'video/mp4', upsert: true });
-    if (uploadError) throw new HttpError(502, 'Impossible d’enregistrer le MP4 final dans la médiathèque sécurisée.');
+    const videoObjects = serverVideoObjects(admin);
+    let storedFinalPath: string;
+    try { storedFinalPath = await videoObjects.uploadFinal(finalPath, output); }
+    catch { throw new HttpError(502, 'Impossible d’enregistrer le MP4 final dans le stockage sécurisé.'); }
 
     const { data: existingLedger, error: ledgerReadError } = await admin.from('usage_ledger').select('status,cost_usd,cost_eur,price_fcfa').eq('version_id', versionId).eq('kind', 'postprod').maybeSingle();
     if (ledgerReadError) throw new HttpError(503, 'Impossible de vérifier le journal de post-production.');
@@ -81,17 +84,17 @@ export async function beginPostproduction(versionId: string) {
         applied_fcfa_per_second: 0, price_fcfa: 0, status: 'charged',
       });
       if (ledgerError) {
-        await admin.storage.from('videos').remove([finalPath]);
+        await videoObjects.remove([storedFinalPath]);
         throw new HttpError(503, 'Le fichier est prêt, mais son journal de coûts n’a pas pu être enregistré.');
       }
     }
 
     const completedMetrics = firstObservedAt(metrics, 'postproductionCompletedAt', new Date().toISOString());
-    const { error: versionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, overlay_variant: null, error_message: null, brief_json: { ...briefData, processingMetrics: completedMetrics }, updated_at: new Date().toISOString() }).eq('id', versionId);
+    const { error: versionError } = await admin.from('video_versions').update({ status: 'ready', final_path: storedFinalPath, overlay_variant: null, error_message: null, brief_json: { ...briefData, processingMetrics: completedMetrics }, updated_at: new Date().toISOString() }).eq('id', versionId);
     if (versionError) throw new HttpError(503, 'Le MP4 final est enregistré; son état doit être réconcilié.');
     const { error: readyError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
-    return { id: versionId, status: 'ready' as const, finalPath };
+    return { id: versionId, status: 'ready' as const, finalPath: storedFinalPath };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -154,13 +157,14 @@ export async function assembleShotMontage(versionId: string) {
     const output = await readFile(outputFile);
     validateMp4(output);
     const finalPath = `${version.video_id}/${versionId}/montage.mp4`;
-    const { error: uploadError } = await admin.storage.from('videos').upload(finalPath, output, { contentType: 'video/mp4', upsert: true });
-    if (uploadError) throw new HttpError(502, 'Impossible d’enregistrer le montage dans le stockage sécurisé.');
-    const { error: updateVersionError } = await admin.from('video_versions').update({ status: 'ready', final_path: finalPath, raw_path: null, error_message: null, brief_json: { ...brief, processingMetrics: completedMetrics }, updated_at: new Date().toISOString() }).eq('id', versionId);
+    let storedFinalPath: string;
+    try { storedFinalPath = await serverVideoObjects(admin).uploadFinal(finalPath, output); }
+    catch { throw new HttpError(502, 'Impossible d’enregistrer le montage dans le stockage sécurisé.'); }
+    const { error: updateVersionError } = await admin.from('video_versions').update({ status: 'ready', final_path: storedFinalPath, raw_path: null, error_message: null, brief_json: { ...brief, processingMetrics: completedMetrics }, updated_at: new Date().toISOString() }).eq('id', versionId);
     if (updateVersionError) throw new HttpError(503, 'Le montage est enregistré; son état doit être réconcilié.');
     const { error: updateVideoError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (updateVideoError) throw new HttpError(503, 'Le montage est prêt; son état doit être réconcilié.');
-    return { finalPath };
+    return { finalPath: storedFinalPath };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
