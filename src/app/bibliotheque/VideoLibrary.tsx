@@ -56,13 +56,27 @@ export function VideoLibrary({ role }: { role: Role }) {
   const refreshing = useRef(false);
   const [refreshIssues, setRefreshIssues] = useState(false);
 
-  const loadVideos = useCallback(async () => {
+  const loadVideos = useCallback(async (renewPreviewIds: ReadonlySet<string> = new Set()) => {
     const response = await fetch('/api/versions');
     const data = await response.json();
     if (!response.ok) throw new Error(data.error ?? 'Impossible de charger la bibliothèque.');
-    setVideos(data.versions ?? []);
-    setSelectedVideo((current) => current ? (data.versions ?? []).find((video: Video) => (video.videoId ?? video.id) === (current.videoId ?? current.id)) ?? null : null);
-    const visibleIds = new Set((data.versions ?? []).map((video: Video) => video.videoId ?? video.id));
+    const incoming = (data.versions ?? []) as Video[];
+    setVideos((current) => {
+      const existing = new Map(current.map((video) => [video.id, video]));
+      return incoming.map((video) => {
+        const previous = existing.get(video.id);
+        const keepPreview = previous?.previewUrl && previous.previewSource === video.previewSource && !renewPreviewIds.has(video.id);
+        return keepPreview ? { ...video, previewUrl: previous.previewUrl } : video;
+      });
+    });
+    setSelectedVideo((current) => {
+      if (!current) return null;
+      const updated = incoming.find((video) => (video.videoId ?? video.id) === (current.videoId ?? current.id));
+      if (!updated) return null;
+      const keepPreview = current.previewUrl && current.previewSource === updated.previewSource && !renewPreviewIds.has(current.id);
+      return keepPreview ? { ...updated, previewUrl: current.previewUrl } : updated;
+    });
+    const visibleIds = new Set(incoming.map((video: Video) => video.videoId ?? video.id));
     setSelectedIds((current) => current.filter((id) => visibleIds.has(id)));
   }, []);
 
@@ -73,7 +87,7 @@ export function VideoLibrary({ role }: { role: Role }) {
     }
     renewedPreviewIds.current.add(versionId);
     try {
-      await loadVideos();
+      await loadVideos(new Set([versionId]));
     } catch (cause) {
       setUnavailablePreviewIds((current) => current.includes(versionId) ? current : [...current, versionId]);
       setError(cause instanceof Error ? cause.message : 'Impossible de renouveler le lien de lecture.');
@@ -101,7 +115,7 @@ export function VideoLibrary({ role }: { role: Role }) {
       } catch {
         setRefreshIssues(true);
       } finally { refreshing.current = false; }
-    }, 5000);
+    }, 15_000);
     return () => window.clearInterval(timer);
   }, [loadVideos, videos]);
 
@@ -200,15 +214,15 @@ export function VideoLibrary({ role }: { role: Role }) {
             {isVideoInProgress(video.status) ? 'Génération en cours' : 'Sélectionner'}
           </label>
         </div>
-        {video.previewUrl ? <video controls preload="metadata" src={video.previewUrl} onError={() => { void renewExpiredPreview(video.id); }} onLoadedMetadata={() => clearPreviewError(video.id)} className={`${videoAspectClass(video.format)} w-full bg-[#232326] object-contain`} aria-label={`Aperçu de ${video.title ?? 'la vidéo'}`} /> : <div className={`grid ${videoAspectClass(video.format)} place-items-center bg-[#eeeeef] text-[#8b8b91]`}><svg aria-hidden="true" viewBox="0 0 24 24" className="size-9 fill-none stroke-current" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg></div>}
+        {video.previewUrl ? <video controls preload="none" src={video.previewUrl} onError={() => { void renewExpiredPreview(video.id); }} onLoadedMetadata={() => clearPreviewError(video.id)} className={`${videoAspectClass(video.format)} w-full bg-[#232326] object-contain`} aria-label={`Aperçu de ${video.title ?? 'la vidéo'}`} /> : <div className={`grid ${videoAspectClass(video.format)} place-items-center bg-[#eeeeef] text-[#8b8b91]`}><svg aria-hidden="true" viewBox="0 0 24 24" className="size-9 fill-none stroke-current" strokeWidth="1.5"><path d="M4 5h16v14H4zM10 9l5 3-5 3z" /></svg></div>}
         {video.previewSource === 'raw' && <p className="border-t border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu du fichier brut : l’habillage ou la piste audio finale peuvent manquer.</p>}
         {(!video.previewUrl || unavailablePreviewIds.includes(video.id)) && ['ready', 'review'].includes(video.status) && <p className="border-t border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu indisponible après renouvellement : le MP4 est absent ou inaccessible dans le stockage.</p>}
         <div className="p-4"><div className="flex items-center justify-between gap-3"><StatusPill status={labels[video.status] ?? video.status} /><span className="text-xs font-semibold tabular-nums">{formatVideoPrice(video)}</span></div><h3 className="mt-3 truncate text-sm font-semibold">{video.title ?? `${video.make ?? 'Nouvelle'} ${video.model ?? 'vidéo'}`}</h3><p className="mt-1 text-xs text-[#77777d]">{formatVideoDate(video.createdAt ?? video.created_at)} · {video.durationSeconds ?? 5} s · <span className="font-medium text-[#4b4b50]">{videoMethodLabel(video)}</span></p>
-          {video.status === 'ready' && video.videoUrl ? <div className="mt-4 flex flex-wrap gap-2"><a href={video.videoUrl} download onClick={(event) => event.stopPropagation()} className="inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a>{role === 'collaborateur' && <button type="button" onClick={(event) => { event.stopPropagation(); void submitForValidation(video); }} className="inline-flex min-h-11 items-center rounded-sm border border-[#e2e2e5] px-3.5 py-2.5 text-xs font-semibold">Envoyer en validation</button>}</div> : video.status === 'generating' ? <p className="mt-4 text-xs text-[#626269]">{stageLabels[video.processingStage ?? 'generating'] ?? 'Génération en cours'}{video.stageElapsedSeconds != null ? ` · ${formatElapsed(video.stageElapsedSeconds)}` : ''}{video.totalQualityShots ? ` · Contrôle ${video.checkedQualityShots ?? 0}/${video.totalQualityShots} plans` : ''}. Actualisation toutes les 5 s.{(video.stageElapsedSeconds ?? 0) >= 600 ? ' Le délai est inhabituel ; vérifiez le statut avant de relancer pour éviter un doublon.' : ''}</p> : null}
+          {video.status === 'ready' && video.videoUrl ? <div className="mt-4 flex flex-wrap gap-2"><a href={video.videoUrl} download onClick={(event) => event.stopPropagation()} className="inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-3.5 py-2.5 text-xs font-semibold text-white hover:bg-[#a71715] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#c51e1c]">Télécharger le MP4</a>{role === 'collaborateur' && <button type="button" onClick={(event) => { event.stopPropagation(); void submitForValidation(video); }} className="inline-flex min-h-11 items-center rounded-sm border border-[#e2e2e5] px-3.5 py-2.5 text-xs font-semibold">Envoyer en validation</button>}</div> : video.status === 'generating' ? <p className="mt-4 text-xs text-[#626269]">{stageLabels[video.processingStage ?? 'generating'] ?? 'Génération en cours'}{video.stageElapsedSeconds != null ? ` · ${formatElapsed(video.stageElapsedSeconds)}` : ''}{video.totalQualityShots ? ` · Contrôle ${video.checkedQualityShots ?? 0}/${video.totalQualityShots} plans` : ''}. Actualisation toutes les 15 s.{(video.stageElapsedSeconds ?? 0) >= 600 ? ' Le délai est inhabituel ; vérifiez le statut avant de relancer pour éviter un doublon.' : ''}</p> : null}
           {formatStageDurations(video.processingDurations) && <p className="mt-3 text-[11px] text-[#77777e]">{video.status === 'generating' ? 'Étapes' : 'Durées'} : {formatStageDurations(video.processingDurations)}</p>}
         </div>
       </article>)}
     </div>}
-    {selectedVideo && <aside className="border border-[#e2e2e5] bg-white p-5" aria-label="Détails de la vidéo sélectionnée"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#c51e1c]">Détail de la vidéo</p><h2 className="mt-1 text-lg font-semibold">{selectedVideo.title ?? 'Vidéo sans titre'}</h2></div><span className="text-xs text-[#626269]">{selectedVideo.format ?? '16:9'} · V{selectedVideo.version ?? 1} · {selectedVideo.durationSeconds ?? 5} s · {videoMethodLabel(selectedVideo)}</span></div>{selectedVideo.previewUrl && <video controls preload="metadata" src={selectedVideo.previewUrl} onError={() => { void renewExpiredPreview(selectedVideo.id); }} onLoadedMetadata={() => clearPreviewError(selectedVideo.id)} className={`mt-4 ${videoAspectClass(selectedVideo.format)} max-h-[420px] w-full bg-[#232326] object-contain`} />}{selectedVideo.previewSource === 'raw' && <p className="mt-3 border border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu du fichier brut : l’habillage ou la piste audio finale peuvent manquer.</p>}{(!selectedVideo.previewUrl || unavailablePreviewIds.includes(selectedVideo.id)) && ['ready', 'review'].includes(selectedVideo.status) && <p className="mt-3 border border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu indisponible après renouvellement : le MP4 est absent ou inaccessible dans le stockage.</p>}{selectedVideo.videoUrl && <a href={selectedVideo.videoUrl} download className="mt-4 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white">Télécharger MP4</a>}</aside>}
+    {selectedVideo && <aside className="border border-[#e2e2e5] bg-white p-5" aria-label="Détails de la vidéo sélectionnée"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#c51e1c]">Détail de la vidéo</p><h2 className="mt-1 text-lg font-semibold">{selectedVideo.title ?? 'Vidéo sans titre'}</h2></div><span className="text-xs text-[#626269]">{selectedVideo.format ?? '16:9'} · V{selectedVideo.version ?? 1} · {selectedVideo.durationSeconds ?? 5} s · {videoMethodLabel(selectedVideo)}</span></div>{selectedVideo.previewUrl && <video controls preload="none" src={selectedVideo.previewUrl} onError={() => { void renewExpiredPreview(selectedVideo.id); }} onLoadedMetadata={() => clearPreviewError(selectedVideo.id)} className={`mt-4 ${videoAspectClass(selectedVideo.format)} max-h-[420px] w-full bg-[#232326] object-contain`} />}{selectedVideo.previewSource === 'raw' && <p className="mt-3 border border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu du fichier brut : l’habillage ou la piste audio finale peuvent manquer.</p>}{(!selectedVideo.previewUrl || unavailablePreviewIds.includes(selectedVideo.id)) && ['ready', 'review'].includes(selectedVideo.status) && <p className="mt-3 border border-[#ead9b4] bg-[#fff9ed] px-4 py-2 text-xs text-[#77591f]">Aperçu indisponible après renouvellement : le MP4 est absent ou inaccessible dans le stockage.</p>}{selectedVideo.videoUrl && <a href={selectedVideo.videoUrl} download className="mt-4 inline-flex min-h-11 items-center rounded-sm bg-[#c51e1c] px-4 py-2.5 text-xs font-semibold text-white">Télécharger MP4</a>}</aside>}
   </>;
 }
