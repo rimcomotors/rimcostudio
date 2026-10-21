@@ -1,3 +1,9 @@
+## État courant — 21 octobre 2026
+
+GitHub main pointe sur le merge de la PR #62 (9031f540); le contrôle visible est vert et aucune PR n’est ouverte. Le produit a évolué au-delà de cette ancienne V1 : le parcours courant Standard/Pro/Premium et les points à vérifier pour la reprise sont décrits dans docs/PRISE_EN_MAIN.md. Confirmer dans Supabase l’application de la migration 0029 et classer les branches historiques avant nettoyage.
+
+La suite du document conserve le suivi historique au 8 octobre 2026 et ne décrit pas l’état actuel du produit.
+
 # Avancement de la V1
 
 État vérifié le 8 octobre 2026. La V1 demandée permet de générer une vidéo de 5 secondes, la visionner puis télécharger son MP4. Elle ne comprend pas la validation ni l’édition après génération.
