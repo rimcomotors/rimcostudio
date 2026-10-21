@@ -9,6 +9,7 @@ import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
 import { createPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { collectVideoArtifactPaths } from '@/core/storage/intermediate-cleanup';
 import { createSignedVideoDownloadUrl } from '@/core/storage/signed-video';
 import { getScenePreset } from '@/core/scenes/catalog';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
@@ -216,7 +217,7 @@ export async function DELETE(request: Request) {
     }
 
     const admin = createStorageAdminClient();
-    let query = admin.from('videos').select('id,user_id,status,video_versions(status,raw_path,final_path)').in('id', videoIds);
+    let query = admin.from('videos').select('id,user_id,status,video_versions(id,status,raw_path,final_path)').in('id', videoIds);
     if (actor.role === 'collaborateur') query = query.eq('user_id', actor.id);
     const { data: videos, error: queryError } = await query;
     if (queryError) throw queryError;
@@ -227,9 +228,15 @@ export async function DELETE(request: Request) {
       (Array.isArray(video.video_versions) && video.video_versions.some((version) => ['queued', 'generating', 'postprocessing'].includes(version.status))));
     if (isInProgress) throw new HttpError(409, 'Une vidéo est encore en cours de génération et ne peut pas être supprimée.');
 
-    const paths = [...new Set(videos.flatMap((video) => Array.isArray(video.video_versions)
-      ? video.video_versions.flatMap((version) => [version.raw_path, version.final_path].filter((path): path is string => Boolean(path)))
-      : []))];
+    const versionIds = videos.flatMap((video) => Array.isArray(video.video_versions) ? video.video_versions.map((version) => version.id) : []);
+    const { data: shots, error: shotsError } = versionIds.length
+      ? await admin.from('video_shots').select('raw_path,keyframe_path,video_quality_previous_path').in('version_id', versionIds)
+      : { data: [], error: null };
+    if (shotsError) throw new HttpError(503, 'Impossible de préparer le nettoyage des fichiers de plans. Aucune vidéo n’a été supprimée.');
+    const paths = collectVideoArtifactPaths(
+      videos.flatMap((video) => Array.isArray(video.video_versions) ? video.video_versions : []),
+      shots ?? [],
+    );
     if (paths.length) {
       const { error: storageError } = await admin.storage.from('videos').remove(paths);
       if (storageError) throw storageError;

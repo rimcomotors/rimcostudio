@@ -91,6 +91,7 @@ export async function beginPostproduction(versionId: string) {
     if (versionError) throw new HttpError(503, 'Le MP4 final est enregistré; son état doit être réconcilié.');
     const { error: readyError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (readyError) throw new HttpError(503, 'Le fichier final est prêt; son état doit être réconcilié.');
+    await removeCompletedIntermediates(admin, versionId, version.raw_path, []);
     return { id: versionId, status: 'ready' as const, finalPath };
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -117,7 +118,7 @@ export async function assembleShotMontage(versionId: string) {
   if (version.final_path) return { finalPath: version.final_path as string };
 
   const { data: shots, error: shotsError } = await admin.from('video_shots')
-    .select('shot_number,duration_seconds,status,raw_path')
+    .select('shot_number,duration_seconds,status,raw_path,video_quality_previous_path')
     .eq('version_id', versionId).order('shot_number');
   const brief = version.brief_json && typeof version.brief_json === 'object' ? version.brief_json as Record<string, unknown> : {};
   const oldMetrics = brief.processingMetrics && typeof brief.processingMetrics === 'object' ? brief.processingMetrics as ProcessingMetrics : {};
@@ -160,9 +161,32 @@ export async function assembleShotMontage(versionId: string) {
     if (updateVersionError) throw new HttpError(503, 'Le montage est enregistré; son état doit être réconcilié.');
     const { error: updateVideoError } = await admin.from('videos').update({ status: 'ready', updated_at: new Date().toISOString() }).eq('id', version.video_id);
     if (updateVideoError) throw new HttpError(503, 'Le montage est prêt; son état doit être réconcilié.');
+    await removeCompletedIntermediates(admin, versionId, null, shots.flatMap((shot) => [shot.raw_path, shot.video_quality_previous_path].filter((path): path is string => Boolean(path))));
     return { finalPath };
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function removeCompletedIntermediates(admin: AdminClient, versionId: string, versionRawPath: string | null, shotRawPaths: string[]) {
+  const paths = [...new Set([versionRawPath, ...shotRawPaths].filter((path): path is string => Boolean(path)))];
+  if (!paths.length) return;
+  try {
+    const { error: removeError } = await admin.storage.from('videos').remove(paths);
+    if (removeError) throw removeError;
+  } catch {
+    console.warn('Les intermédiaires d’une vidéo terminée restent à nettoyer:', { versionId, fileCount: paths.length });
+    return;
+  }
+  try {
+    const [versionUpdate, shotRawUpdate, previousRawUpdate] = await Promise.all([
+      versionRawPath ? admin.from('video_versions').update({ raw_path: null }).eq('id', versionId).eq('raw_path', versionRawPath) : Promise.resolve({ error: null }),
+      shotRawPaths.length ? admin.from('video_shots').update({ raw_path: null }).eq('version_id', versionId).in('raw_path', shotRawPaths) : Promise.resolve({ error: null }),
+      shotRawPaths.length ? admin.from('video_shots').update({ video_quality_previous_path: null }).eq('version_id', versionId).in('video_quality_previous_path', shotRawPaths) : Promise.resolve({ error: null }),
+    ]);
+    if (versionUpdate.error || shotRawUpdate.error || previousRawUpdate.error) throw new Error('Références intermédiaires non mises à jour.');
+  } catch {
+    console.warn('Les références aux intermédiaires supprimés doivent être réconciliées:', { versionId, fileCount: paths.length });
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectCompletedIntermediatePaths } from './intermediate-cleanup';
+import { collectCompletedIntermediatePaths, collectVideoArtifactPaths } from './intermediate-cleanup';
 
 describe('collectCompletedIntermediatePaths', () => {
   it('selects only raw clips belonging to ready versions with a final and never the final itself', () => {
@@ -33,5 +33,21 @@ describe('collectCompletedIntermediatePaths', () => {
     expect(collectCompletedIntermediatePaths(versions, shots)).toEqual([
       { versionId: 'ready', path: 'v/raw.mp4' },
     ]);
+  });
+});
+
+describe('collectVideoArtifactPaths', () => {
+  it('includes every video, shot and keyframe object when a user deletes a video', () => {
+    expect(collectVideoArtifactPaths(
+      [{ raw_path: 'v/raw.mp4', final_path: 'v/final.mp4' }],
+      [{ raw_path: 'v/shot.mp4', keyframe_path: 'v/keyframe.png', video_quality_previous_path: 'v/old-shot.mp4' }],
+    )).toEqual(['v/raw.mp4', 'v/final.mp4', 'v/shot.mp4', 'v/keyframe.png', 'v/old-shot.mp4']);
+  });
+
+  it('removes null paths and duplicate object keys', () => {
+    expect(collectVideoArtifactPaths(
+      [{ raw_path: null, final_path: 'v/final.mp4' }],
+      [{ raw_path: 'v/final.mp4', keyframe_path: null, video_quality_previous_path: null }],
+    )).toEqual(['v/final.mp4']);
   });
 });
