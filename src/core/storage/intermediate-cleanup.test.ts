@@ -10,7 +10,7 @@ describe('collectCompletedIntermediatePaths', () => {
       { id: 'same-path', status: 'ready', final_path: 'v4/raw.mp4', raw_path: 'v4/raw.mp4' },
     ];
     const shots = [
-      { version_id: 'ready', status: 'ready', raw_path: 'v1/shot-1.mp4' },
+      { version_id: 'ready', status: 'ready', raw_path: 'v1/shot-1.mp4', video_quality_previous_path: 'v1/shot-1-retry-old.mp4' },
       { version_id: 'ready', status: 'failed', raw_path: 'v1/failed.mp4' },
       { version_id: 'pending', status: 'ready', raw_path: 'v2/shot-1.mp4' },
     ];
@@ -18,6 +18,7 @@ describe('collectCompletedIntermediatePaths', () => {
     expect(collectCompletedIntermediatePaths(versions, shots)).toEqual([
       { versionId: 'ready', path: 'v1/raw.mp4' },
       { versionId: 'ready', path: 'v1/shot-1.mp4' },
+      { versionId: 'ready', path: 'v1/shot-1-retry-old.mp4' },
     ]);
   });
 
@@ -25,7 +26,7 @@ describe('collectCompletedIntermediatePaths', () => {
     const versions = [{ id: 'ready', status: 'ready', final_path: 'v/final.mp4', raw_path: 'v/raw.mp4' }];
     const shots = [
       { version_id: 'ready', status: 'ready', raw_path: 'v/raw.mp4' },
-      { version_id: 'ready', status: 'ready', raw_path: 'v/final.mp4' },
+      { version_id: 'ready', status: 'ready', raw_path: 'v/final.mp4', video_quality_previous_path: 'r2://old/retry.mp4' },
       { version_id: 'ready', status: 'ready', raw_path: null },
     ];
 
