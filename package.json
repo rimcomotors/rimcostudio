@@ -14,8 +14,6 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1154.0",
-    "@aws-sdk/s3-request-presigner": "^3.1154.0",
     "@fal-ai/client": "^1.6.2",
     "@fontsource/bebas-neue": "^5.3.0",
     "@supabase/ssr": "^0.7.0",

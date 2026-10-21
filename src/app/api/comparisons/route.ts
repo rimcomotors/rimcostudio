@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { errorResponse, HttpError, requireRole } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { serverVideoObjects } from '@/core/storage/server-video-objects';
 import { env } from '@/env';
 import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
@@ -55,8 +54,8 @@ export async function GET() {
         const path = version?.final_path;
         let videoUrl: string | undefined;
         if (path) {
-          try { videoUrl = await serverVideoObjects(admin).createReadUrl(path, { expiresIn: 3600 }); }
-          catch { videoUrl = undefined; }
+          const { data: signed } = await admin.storage.from('videos').createSignedUrl(path, 3600);
+          videoUrl = signed?.signedUrl;
         }
         const ledgerRows = Array.isArray(version?.usage_ledger) ? version.usage_ledger : [];
         const generationLedger = ledgerRows.find((row) => row.kind === 'generation' && row.ai_model_id);

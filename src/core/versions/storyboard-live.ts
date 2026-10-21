@@ -7,7 +7,6 @@ import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQuality
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { serverVideoObjects } from '@/core/storage/server-video-objects';
 import { keyframeImageUploadTarget } from '@/core/storage/keyframe-image';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
@@ -994,8 +993,9 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
 }
 
 async function signedUrl(admin: ReturnType<typeof createStorageAdminClient>, path: string) {
-  try { return await serverVideoObjects(admin).createReadUrl(path, { expiresIn: 3600 }); }
-  catch { throw new HttpError(503, 'Impossible de créer le lien temporaire du montage.'); }
+  const { data, error } = await admin.storage.from('videos').createSignedUrl(path, 3600);
+  if (error || !data) throw new HttpError(503, 'Impossible de créer le lien temporaire du montage.');
+  return data.signedUrl;
 }
 
 function latestMetricsForShots(shots: Array<{ shot_number: number }>, byShot: Record<string, ProcessingMetrics>, fallbackAt: string) {

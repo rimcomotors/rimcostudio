@@ -9,7 +9,7 @@ import { requestSchema } from '@/core/versions/request-schema';
 import { createLiveVersion } from '@/core/versions/live';
 import { createPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { serverVideoObjects } from '@/core/storage/server-video-objects';
+import { createSignedVideoDownloadUrl } from '@/core/storage/signed-video';
 import { getScenePreset } from '@/core/scenes/catalog';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
@@ -110,7 +110,7 @@ export async function GET(request: Request) {
       let previewSource: 'final' | 'raw' | null = null;
       const finalPath = latest?.final_path ?? null;
       const rawPath = latest?.raw_path ?? null;
-      const videoObjects = serverVideoObjects(admin);
+      const storage = admin.storage.from('videos');
       if (includePreviews && canPreview && isPersistedMock && (finalPath || rawPath)) {
         previewUrl = '/mock/mock-video.mp4';
         previewSource = finalPath ? 'final' : 'raw';
@@ -120,16 +120,15 @@ export async function GET(request: Request) {
           ...(rawPath && rawPath !== finalPath ? [{ path: rawPath, source: 'raw' as const }] : []),
         ];
         for (const candidate of previewPaths) {
-          try {
-            previewUrl = await videoObjects.createReadUrl(candidate.path, { expiresIn: 3600 });
-            previewSource = candidate.source;
-            break;
-          } catch { /* Keep trying a previous source path, if present. */ }
+          const { data: signed } = await storage.createSignedUrl(candidate.path, 3600);
+          if (!signed?.signedUrl) continue;
+          previewUrl = signed.signedUrl;
+          previewSource = candidate.source;
+          break;
         }
       }
       if (includePreviews && video.status === 'approved' && finalPath) {
-        try { videoUrl = await videoObjects.createReadUrl(finalPath, { expiresIn: 3600, download: true }); }
-        catch { videoUrl = null; }
+        videoUrl = await createSignedVideoDownloadUrl((storagePath, expiresIn, options) => storage.createSignedUrl(storagePath, expiresIn, options), finalPath);
       }
       if (includePreviews && video.status === 'approved' && isPersistedMock && previewUrl) videoUrl = previewUrl;
       const status = video.status === 'approved' ? 'ready' : video.status === 'rejected' ? 'rejected' : video.status === 'review' ? 'review' : video.status === 'cancelled' ? 'cancelled' : video.status === 'ready' ? 'ready' : latest?.status === 'failed' ? 'failed' : latest?.status === 'cancelled' ? 'cancelled' : latest?.status === 'queued' || latest?.status === 'generating' || latest?.status === 'postprocessing' ? 'generating' : 'draft';
@@ -232,7 +231,8 @@ export async function DELETE(request: Request) {
       ? video.video_versions.flatMap((version) => [version.raw_path, version.final_path].filter((path): path is string => Boolean(path)))
       : []))];
     if (paths.length) {
-      await serverVideoObjects(admin).remove(paths);
+      const { error: storageError } = await admin.storage.from('videos').remove(paths);
+      if (storageError) throw storageError;
     }
     let deleteQuery = admin.from('videos').delete().in('id', videoIds);
     if (actor.role === 'collaborateur') deleteQuery = deleteQuery.eq('user_id', actor.id);

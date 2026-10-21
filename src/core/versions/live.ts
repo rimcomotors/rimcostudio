@@ -7,7 +7,6 @@ import { veoVideoProvider, VEO_ENDPOINT } from '@/core/providers/fal-veo';
 import { seedanceVideoProvider, SEEDANCE_ENDPOINT } from '@/core/providers/fal-seedance';
 import { buildFalBriefWithCost, FalLlmBriefError } from '@/core/providers/fal-llm';
 import { createStorageAdminClient } from '@/core/storage/supabase';
-import { serverVideoObjects } from '@/core/storage/server-video-objects';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { HttpError } from '@/core/auth/guards';
@@ -430,6 +429,7 @@ async function readBoundedVideo(response: Response, maxBytes: number): Promise<B
   return Buffer.concat(chunks, total);
 }
 async function signedVideoUrl(admin: ReturnType<typeof createStorageAdminClient>, path: string) {
-  try { return await serverVideoObjects(admin).createReadUrl(path, { expiresIn: 3600 }); }
-  catch { throw new HttpError(503, 'Impossible de créer le lien temporaire de la vidéo.'); }
+  const { data, error } = await admin.storage.from('videos').createSignedUrl(path, 3600);
+  if (error) throw new HttpError(503, 'Impossible de créer le lien temporaire de la vidéo.');
+  return data.signedUrl;
 }
