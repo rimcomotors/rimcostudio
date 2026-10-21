@@ -7,6 +7,7 @@ import { buildKeyframeAnimationPrompt, buildKeyframePrompt, buildKeyframeQuality
 import { logFalStatusFailure } from '@/core/providers/fal-observability';
 import { klingVideoProvider, KLING_ENDPOINT } from '@/core/providers/fal-kling';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { createSignedStorageObjectUrl } from '@/core/storage/signed-video';
 import { keyframeImageUploadTarget } from '@/core/storage/keyframe-image';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
@@ -80,9 +81,9 @@ async function resolveFalAssetUrl(path: string, admin: ReturnType<typeof createS
     }
     return uploads.get(path)!;
   }
-  const { data: signed, error } = await admin.storage.from('assets').createSignedUrl(path, 3600);
-  if (error || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer une image de référence.');
-  return signed.signedUrl;
+  const signedUrl = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from('assets').createSignedUrl(storagePath, expiresIn), 'assets', path);
+  if (!signedUrl) throw new HttpError(422, 'Impossible de préparer une image de référence.');
+  return signedUrl;
 }
 
 export async function createLiveStoryboard(actor: Actor, input: CreateVersionInput & { storyboard: StoryboardShot[]; workflow?: 'single' | 'multi_clip'; storyMode: 'standard' | 'pro' | 'premium'; clipDurationSeconds: ClipDurationSeconds; vehicleDossierId: string; vehicleDossierIds: string[]; placeIds: string[]; purpose: 'presentation' | 'advertising'; storyboardLedgerIds?: string[]; comparisonCampaignId?: string }) {
@@ -390,9 +391,9 @@ export async function createLiveStoryboard(actor: Actor, input: CreateVersionInp
         }
         return curatedUploads.get(path)!;
       }
-      const { data: signed, error } = await admin.storage.from('assets').createSignedUrl(path, 3600);
-      if (error || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer une image de référence.');
-      return signed.signedUrl;
+      const signedUrl = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from('assets').createSignedUrl(storagePath, expiresIn), 'assets', path);
+      if (!signedUrl) throw new HttpError(422, 'Impossible de préparer une image de référence.');
+      return signedUrl;
     }));
     return provider.submit({ prompt: prompts[index], referenceImageUrls: refs, durationS: shot.durationSeconds, aspectRatio: input.format, endUserId: actor.id }, falCredential.apiKey);
   }));
@@ -533,13 +534,13 @@ async function refreshKeyframes(input: {
         ]);
         return;
       }
-      const { data: signed, error: signedError } = await admin.storage.from(target.bucket).createSignedUrl(target.path, 3600);
-      if (signedError || !signed?.signedUrl) throw new HttpError(503, 'Impossible de créer le lien de contrôle temporaire.');
+      const signedUrl = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from(target.bucket).createSignedUrl(storagePath, expiresIn), target.bucket, target.path);
+      if (!signedUrl) throw new HttpError(503, 'Impossible de créer le lien de contrôle temporaire.');
       const excludePeople = shouldExcludePeople(String(brief.character ?? ''), String(brief.user_direction ?? ''));
       const visionPrompt = `${buildKeyframeQualityPrompt({ vehicleReferenceCount, hasLocationReference: Boolean(draft.locationPhotoId), excludePeople })} Plan: ${draft.title}; scène: ${draft.scene}; cadrage: ${draft.framing}; lieu: ${draft.location}.`;
       let qualityJob: { requestId: string };
       try {
-        qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signed.signedUrl, ...referenceUrls] }, apiKey);
+        qualityJob = await submitKeyframeQuality({ prompt: visionPrompt, imageUrls: [signedUrl, ...referenceUrls] }, apiKey);
       } catch (cause) {
         const statusCode = falErrorStatusCode(cause);
         const uncertain = statusCode === null || statusCode >= 500;
@@ -643,8 +644,8 @@ async function refreshKeyframes(input: {
   if (refreshedError || !refreshedShots) throw new HttpError(503, 'Impossible de relire la progression des images-clés.');
   const completedKeyframes = refreshedShots.filter((shot) => shot.keyframe_status === 'ready').length;
   const keyframes = await Promise.all(refreshedShots.filter((shot) => typeof shot.keyframe_path === 'string').map(async (shot) => {
-    const { data, error } = await admin.storage.from('videos').createSignedUrl(shot.keyframe_path!, 3600);
-    return error || !data?.signedUrl ? null : { number: shot.shot_number, title: shot.title, url: data.signedUrl, quality: shot.keyframe_quality };
+    const url = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('videos').createSignedUrl(path, expiresIn), 'videos', shot.keyframe_path!);
+    return !url ? null : { number: shot.shot_number, title: shot.title, url, quality: shot.keyframe_quality };
   }));
   const keyframePreviews = keyframes.filter((item): item is NonNullable<typeof item> => Boolean(item));
   const pendingKeyframes = refreshedShots.some((shot) => ['queued','generating','checking'].includes(shot.keyframe_status));
@@ -676,14 +677,14 @@ async function refreshKeyframes(input: {
     if (!claim) return;
     const draft = draftsByNumber.get(Number(shot.shot_number));
     if (!draft || !shot.keyframe_path) throw new HttpError(422, 'Une image-clé validée est introuvable.');
-    const { data: signed, error } = await admin.storage.from('videos').createSignedUrl(shot.keyframe_path, 3600);
-    if (error || !signed?.signedUrl) throw new HttpError(503, 'Impossible de préparer une image-clé pour son animation.');
+    const signedUrl = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('videos').createSignedUrl(path, expiresIn), 'videos', shot.keyframe_path);
+    if (!signedUrl) throw new HttpError(503, 'Impossible de préparer une image-clé pour son animation.');
     const prompt = buildKeyframeAnimationPrompt({
       shot: draft, vehicle: String(brief.vehicle_description ?? 'Véhicule de référence'),
       durationS: Number(shot.duration_seconds), mood: String(brief.mood ?? ''), lighting: String(brief.lighting ?? ''),
       excludePeople: shouldExcludePeople(String(brief.character ?? ''), String(brief.user_direction ?? '')),
     });
-    const job = await provider.submit({ prompt, referenceImageUrls: [signed.signedUrl], durationS: Number(shot.duration_seconds), aspectRatio: String(brief.format ?? '16:9'), endUserId: String(video.user_id) }, apiKey);
+    const job = await provider.submit({ prompt, referenceImageUrls: [signedUrl], durationS: Number(shot.duration_seconds), aspectRatio: String(brief.format ?? '16:9'), endUserId: String(video.user_id) }, apiKey);
     const animationPatch = { provider_request_id: job.requestId, provider_endpoint: provider.endpoint, animation_submit_state: 'submitted', status: 'generating', generated_prompt: prompt, provider_poll_failure_count: 0, provider_next_poll_at: null, provider_last_poll_error: null, provider_reconciliation_required: false, updated_at: now };
     const firstWrite = await admin.from('video_shots').update(animationPatch).eq('version_id', version.id).eq('shot_number', shot.shot_number);
     if (firstWrite.error) {
@@ -805,8 +806,8 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       }
       const draft = draftByNumber.get(shotNumber);
       if (!draft || typeof shot.keyframe_path !== 'string') throw new HttpError(503, `Impossible de reprendre le plan ${shotNumber} : référence image manquante.`);
-      const { data: keyframe, error: keyframeError } = await admin.storage.from('videos').createSignedUrl(shot.keyframe_path, 3600);
-      if (keyframeError || !keyframe?.signedUrl) throw new HttpError(503, `Impossible de préparer la reprise du plan ${shotNumber}.`);
+      const keyframeUrl = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('videos').createSignedUrl(path, expiresIn), 'videos', shot.keyframe_path);
+      if (!keyframeUrl) throw new HttpError(503, `Impossible de préparer la reprise du plan ${shotNumber}.`);
       const { data: retryClaim, error: retryClaimError } = await admin.from('video_shots').update({ animation_submit_state: 'submitting', animation_submit_started_at: new Date().toISOString() }).eq('version_id', versionId).eq('shot_number', shotNumber).eq('animation_submit_state', 'submitted').eq('video_quality_retry_count', 0).select('shot_number').maybeSingle();
       if (retryClaimError) throw new HttpError(503, `Impossible de verrouiller la reprise du plan ${shotNumber}.`);
       if (!retryClaim) return;
@@ -817,7 +818,7 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
       });
       let retryJob: { requestId: string };
       try {
-        retryJob = await (statusProvider as ReferenceVideoProvider).submit({ prompt: retryPrompt, referenceImageUrls: [keyframe.signedUrl], durationS: Number(shot.duration_seconds), aspectRatio: String(briefData.format ?? '16:9'), endUserId: String(video.user_id) }, falCredential.apiKey);
+        retryJob = await (statusProvider as ReferenceVideoProvider).submit({ prompt: retryPrompt, referenceImageUrls: [keyframeUrl], durationS: Number(shot.duration_seconds), aspectRatio: String(briefData.format ?? '16:9'), endUserId: String(video.user_id) }, falCredential.apiKey);
       } catch (cause) {
         const statusCode = falErrorStatusCode(cause);
         const uncertain = statusCode === null || statusCode >= 500;
@@ -993,9 +994,9 @@ export async function refreshLiveStoryboard(versionId: string, actor: Actor) {
 }
 
 async function signedUrl(admin: ReturnType<typeof createStorageAdminClient>, path: string) {
-  const { data, error } = await admin.storage.from('videos').createSignedUrl(path, 3600);
-  if (error || !data) throw new HttpError(503, 'Impossible de créer le lien temporaire du montage.');
-  return data.signedUrl;
+  const url = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from('videos').createSignedUrl(storagePath, expiresIn), 'videos', path);
+  if (!url) throw new HttpError(503, 'Impossible de créer le lien temporaire du montage.');
+  return url;
 }
 
 function latestMetricsForShots(shots: Array<{ shot_number: number }>, byShot: Record<string, ProcessingMetrics>, fallbackAt: string) {

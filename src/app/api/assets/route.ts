@@ -4,6 +4,7 @@ import { getActor, errorResponse, HttpError } from '@/core/auth/guards';
 import { env } from '@/env';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { createSignedStoragePreviewUrl } from '@/core/storage/signed-video';
 import { assertPlaceUploadAdmin, assertVehicleDossierAdmin } from '@/core/assets/permissions';
 import { curatedLocationAsset, locationCatalog } from '@/core/assets/location-catalog';
 
@@ -39,8 +40,8 @@ export async function GET(request: Request) {
     if (error) throw error;
     const assets = await Promise.all((data ?? []).map(async (asset) => {
       const bucket = asset.kind === 'audio' ? 'audio' : asset.kind === 'logo' ? 'brand' : 'assets';
-      const { data: signed } = await supabase.storage.from(bucket).createSignedUrl(asset.path, 3600);
-      return { ...asset, previewUrl: signed?.signedUrl ?? null };
+      const previewUrl = await createSignedStoragePreviewUrl((path, expiresIn) => supabase.storage.from(bucket).createSignedUrl(path, expiresIn), bucket, asset.path);
+      return { ...asset, previewUrl };
     }));
     const curatedPlaces = locationCatalog.map(curatedLocationAsset).filter(() => (!requestedKind || requestedKind === 'place') && (!requestedStatus || requestedStatus === 'validée'));
     return NextResponse.json({ assets: [...curatedPlaces, ...assets] });

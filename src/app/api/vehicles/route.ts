@@ -4,6 +4,7 @@ import { errorResponse, getActor, HttpError, requireRole } from '@/core/auth/gua
 import { env } from '@/env';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { createSignedStoragePreviewUrl } from '@/core/storage/signed-video';
 
 function normalizeVehicleValue(value: string | null | undefined) {
   return (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('fr').replace(/[^a-z0-9]+/g, ' ');
@@ -47,8 +48,8 @@ export async function GET() {
       const dossier = group[0];
       const approvedPhotos = group.flatMap((entry) => entry.assets ?? []).filter((asset) => asset.kind === 'vehicle' && asset.status === 'validée');
       const photos = await Promise.all(approvedPhotos.map(async (asset) => {
-        const { data: signed } = await storage.storage.from('assets').createSignedUrl(asset.path, 3600);
-        return { id: asset.id, photoRole: asset.photo_role, title: asset.title, angle: asset.angle, previewUrl: signed?.signedUrl ?? null };
+        const previewUrl = await createSignedStoragePreviewUrl((path, expiresIn) => storage.storage.from('assets').createSignedUrl(path, expiresIn), 'assets', asset.path);
+        return { id: asset.id, photoRole: asset.photo_role, title: asset.title, angle: asset.angle, previewUrl };
       }));
       return { id: dossier.id, key: dossier.id, dossierIds: group.map((entry) => entry.id), make: dossier.make, model: dossier.model, color: dossier.color, variant: dossier.variant, photos };
     }));
@@ -66,8 +67,8 @@ export async function GET() {
     }
     const legacyVehicles = await Promise.all([...legacyGroups.entries()].map(async ([key, assets]) => {
       const photos = await Promise.all(assets.map(async (asset) => {
-        const { data: signed } = await storage.storage.from('assets').createSignedUrl(asset.path, 3600);
-        return { id: asset.id, photoRole: asset.photo_role, title: asset.title, angle: asset.angle, previewUrl: signed?.signedUrl ?? null };
+        const previewUrl = await createSignedStoragePreviewUrl((path, expiresIn) => storage.storage.from('assets').createSignedUrl(path, expiresIn), 'assets', asset.path);
+        return { id: asset.id, photoRole: asset.photo_role, title: asset.title, angle: asset.angle, previewUrl };
       }));
       const first = assets[0];
       return { id: null, key, make: first.make ?? 'Véhicule', model: first.model ?? 'à classer', color: first.color, variant: first.variant, photos };

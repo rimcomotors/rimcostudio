@@ -10,7 +10,7 @@ import { createLiveVersion } from '@/core/versions/live';
 import { createPersistedMockVersion } from '@/core/versions/mock-persistence';
 import { createStorageAdminClient } from '@/core/storage/supabase';
 import { collectVideoArtifactPaths } from '@/core/storage/intermediate-cleanup';
-import { createSignedVideoDownloadUrl } from '@/core/storage/signed-video';
+import { createSignedStoragePreviewUrl, createSignedVideoDownloadUrl } from '@/core/storage/signed-video';
 import { getScenePreset } from '@/core/scenes/catalog';
 import { getSceneConceptDirection } from '@/core/scenes/concepts';
 import { z } from 'zod';
@@ -121,9 +121,8 @@ export async function GET(request: Request) {
           ...(rawPath && rawPath !== finalPath ? [{ path: rawPath, source: 'raw' as const }] : []),
         ];
         for (const candidate of previewPaths) {
-          const { data: signed } = await storage.createSignedUrl(candidate.path, 3600);
-          if (!signed?.signedUrl) continue;
-          previewUrl = signed.signedUrl;
+          previewUrl = await createSignedStoragePreviewUrl((storagePath, expiresIn) => storage.createSignedUrl(storagePath, expiresIn), 'videos', candidate.path);
+          if (!previewUrl) continue;
           previewSource = candidate.source;
           break;
         }

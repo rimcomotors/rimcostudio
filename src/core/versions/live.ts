@@ -7,6 +7,7 @@ import { veoVideoProvider, VEO_ENDPOINT } from '@/core/providers/fal-veo';
 import { seedanceVideoProvider, SEEDANCE_ENDPOINT } from '@/core/providers/fal-seedance';
 import { buildFalBriefWithCost, FalLlmBriefError } from '@/core/providers/fal-llm';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { createSignedStorageObjectUrl } from '@/core/storage/signed-video';
 import { createSupabaseServerClient } from '@/core/supabase/server';
 import { env } from '@/env';
 import { HttpError } from '@/core/auth/guards';
@@ -96,8 +97,8 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     }
     referenceAssets = requestedIds.map((id) => photos.find((photo) => photo.id === id)!).map((photo) => ({ id: photo.id, path: photo.path, angle: photo.angle, photo_role: photo.photo_role }));
   }
-  const { data: image, error: imageError } = await admin.storage.from('assets').createSignedUrl(asset.path, 3600);
-  if (imageError || !image?.signedUrl) throw new HttpError(422, 'Impossible de préparer la photo sélectionnée.');
+  const imageUrl = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('assets').createSignedUrl(path, expiresIn), 'assets', asset.path);
+  if (!imageUrl) throw new HttpError(422, 'Impossible de préparer la photo sélectionnée.');
   let dossierMetadata: { make: string | null; model: string | null; color: string | null; variant: string | null } | null = null;
   if (input.vehicleDossierId) {
     const { data: dossier, error: dossierError } = await authenticated.from('vehicle_dossiers').select('make,model,color,variant,brand_id').eq('id', input.vehicleDossierId).single();
@@ -211,10 +212,10 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
     if (referenceMode && referenceAdapter) {
       const falStorage = createFalClient({ credentials: falCredential.apiKey }).storage;
       const vehicleRefsPromise = Promise.all(referenceAssets.slice(0, Math.max(1, referenceAdapter.maxReferenceImages - (selectedLocation ? 1 : 0))).map(async (photo) => {
-        if (photo.id === asset.id && image.signedUrl) return image.signedUrl;
-        const { data: signed, error: signedError } = await admin.storage.from('assets').createSignedUrl(photo.path, 3600);
-        if (signedError || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer toutes les vues du véhicule.');
-        return signed.signedUrl;
+        if (photo.id === asset.id && imageUrl) return imageUrl;
+        const signedUrl = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('assets').createSignedUrl(path, expiresIn), 'assets', photo.path);
+        if (!signedUrl) throw new HttpError(422, 'Impossible de préparer toutes les vues du véhicule.');
+        return signedUrl;
       }));
       const locationRefPromise = (async () => {
         if (!selectedLocation) return null;
@@ -226,9 +227,9 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
           const mimeType = extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg';
           return falStorage.upload(new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer], { type: mimeType }), { lifecycle: { expiresIn: '1d' } });
         } else {
-          const { data: signed, error: signedError } = await admin.storage.from('assets').createSignedUrl(selectedLocation.path, 3600);
-          if (signedError || !signed?.signedUrl) throw new HttpError(422, 'Impossible de préparer la référence du lieu.');
-          return signed.signedUrl;
+          const signedUrl = await createSignedStorageObjectUrl((path, expiresIn) => admin.storage.from('assets').createSignedUrl(path, expiresIn), 'assets', selectedLocation.path);
+          if (!signedUrl) throw new HttpError(422, 'Impossible de préparer la référence du lieu.');
+          return signedUrl;
         }
       })();
       const [vehicleRefs, locationRef] = await Promise.all([vehicleRefsPromise, locationRefPromise]);
@@ -236,7 +237,7 @@ export async function createLiveVersion(actor: Actor, input: CreateVersionInput,
       ({ requestId } = await referenceAdapter.submit({ prompt, referenceImageUrls: refs, durationS: input.durationS, aspectRatio: input.format, endUserId: actor.id }, falCredential.apiKey));
     } else {
       const provider = model.adapter_family === 'wan' ? wanVideoProvider : model.adapter_family === 'veo' ? veoVideoProvider : model.adapter_family === 'seedance' ? seedanceVideoProvider : klingVideoProvider;
-      ({ requestId } = await provider.submit({ prompt, imageUrl: image.signedUrl, durationS: sourceDurationS as 5 | 6 | 10 | 15 | 20 | 30, format: input.format, endUserId: actor.id }, falCredential.apiKey));
+      ({ requestId } = await provider.submit({ prompt, imageUrl, durationS: sourceDurationS as 5 | 6 | 10 | 15 | 20 | 30, format: input.format, endUserId: actor.id }, falCredential.apiKey));
     }
   } catch {
     await Promise.all([
@@ -429,7 +430,7 @@ async function readBoundedVideo(response: Response, maxBytes: number): Promise<B
   return Buffer.concat(chunks, total);
 }
 async function signedVideoUrl(admin: ReturnType<typeof createStorageAdminClient>, path: string) {
-  const { data, error } = await admin.storage.from('videos').createSignedUrl(path, 3600);
-  if (error) throw new HttpError(503, 'Impossible de créer le lien temporaire de la vidéo.');
-  return data.signedUrl;
+  const url = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from('videos').createSignedUrl(storagePath, expiresIn), 'videos', path);
+  if (!url) throw new HttpError(503, 'Impossible de créer le lien temporaire de la vidéo.');
+  return url;
 }

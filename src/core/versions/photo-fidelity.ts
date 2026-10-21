@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { Actor } from '@/core/auth/guards';
 import { HttpError } from '@/core/auth/guards';
 import { createStorageAdminClient } from '@/core/storage/supabase';
+import { createSignedStorageObjectUrl } from '@/core/storage/signed-video';
 import { findCuratedLocation, locationCatalog } from '@/core/assets/location-catalog';
 import { hasTransparentPngPixels } from '@/core/postproduction/photo-fidelity';
 import { renderPhotoFidelityMontage } from '@/core/postproduction/pipeline';
@@ -185,7 +186,7 @@ function findCuratedLocationByPath(path: string) {
 }
 
 async function signedUrl(admin: ReturnType<typeof createStorageAdminClient>, path: string) {
-  const { data, error } = await admin.storage.from('videos').createSignedUrl(path, 3600);
-  if (error || !data) throw new HttpError(503, 'Impossible de créer le lien temporaire du montage.');
-  return data.signedUrl;
+  const url = await createSignedStorageObjectUrl((storagePath, expiresIn) => admin.storage.from('videos').createSignedUrl(storagePath, expiresIn), 'videos', path);
+  if (!url) throw new HttpError(503, 'Impossible de créer le lien temporaire du montage.');
+  return url;
 }
